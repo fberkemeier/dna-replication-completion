@@ -11,7 +11,7 @@ from datetime import datetime
 project = 'DNAscape'
 copyright = f"{datetime.now().year}, Francisco Berkemeier"
 author = 'Francisco Berkemeier'
-release = '0.0.1'
+release = '1.0.0'
 
 # -- General configuration ---------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration

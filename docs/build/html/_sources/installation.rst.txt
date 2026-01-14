@@ -69,7 +69,14 @@ Launch Jupyter from the repository root:
 
 .. code-block:: bash
 
-   jupyter notebook
+   python -m notebook
+
+or JupyterLab
+
+.. code-block:: bash
+
+   python -m jupyterlab
+
 
 Open one of the example notebooks (for instance,
 ``notebooks/DNAscape_tests.ipynb``) and run the cells sequentially
