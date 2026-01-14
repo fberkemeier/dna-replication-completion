@@ -2,44 +2,63 @@
   <img src="docs/assets/dnascape_logo.png" alt="DNAscape logo" width="50%">
 </p>
 
-# DNAscape
+DNAscape
+========
 
-**DNAscape** is a computational framework for simulating, mapping, and analysing DNA replication kinetics at genome scale.  
-It provides a unified set of models and tools to connect replication origin activity, fork dynamics, and replication timing under flexible mechanistic assumptions.
+DNAscape is a computational framework for simulating, mapping, and analysing DNA replication kinetics at genome scale.
+It provides a unified modelling environment to relate replication origin activity, fork propagation, and replication timing through explicit mechanistic assumptions.
 
-DNAscape is designed to support both **data integration** and **hypothesis-driven modelling**, enabling systematic exploration of DNA replication programmes in normal and perturbed conditions, including replication stress.
+DNAscape supports both data integration and hypothesis-driven modelling by enabling experimental replication datasets to be mapped onto a common kinetic representation, and by allowing systematic comparison of alternative mechanistic descriptions of replication dynamics.
 
----
+------------------------------------------------------------
 
-## Key features
+Key features
+------------
 
-- Genome-scale simulation of DNA replication dynamics  
-- Flexible modelling of origin firing and fork progression  
-- Mapping between replication timing, origin activity, and fork directionality  
-- Support for ensemble simulations and stochastic variability  
+- Genome-scale simulation of DNA replication dynamics
+- Explicit modelling of origin firing and bidirectional fork progression
+- Mapping between replication timing, origin activity, and fork directionality
+- Ensemble simulations capturing stochastic variability
 - Designed for integration with experimental datasets (e.g. Repli-seq, OK-seq)
 
----
+------------------------------------------------------------
 
-## Documentation
+Documentation
+-------------
 
-Full documentation, including installation instructions, tutorials, and API reference, is available at:
-
-👉 **https://dnascape.readthedocs.io/en/latest/**
+Full documentation, including installation instructions, tutorials, and API reference, is available in the [Documentation].
 
 The documentation includes:
-- Installation and environment setup  
-- Worked examples and notebooks  
-- Conceptual overview of the modelling framework  
-- Detailed function and module reference  
+- Installation and environment setup
+- Worked examples and tutorial notebooks
+- Conceptual description of the modelling framework
+- Detailed module and function reference
 
----
+------------------------------------------------------------
 
-## Installation (quick start)
+Installation (quick start)
+--------------------------
 
-```bash
 git clone https://github.com/fberkemeier/DNAscape.git
 cd DNAscape
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+
+See the documentation for recommended workflows and examples.
+
+------------------------------------------------------------
+
+Citation
+--------
+
+If you use DNAscape in your research, please cite the associated preprint or publication (details to be added).
+A CITATION.cff file will be provided to support standard citation workflows.
+
+------------------------------------------------------------
+
+Questions, bugs, and feature requests
+-------------------------------------
+
+If you encounter bugs or have questions regarding usage, please open an issue on GitHub.
+For more detailed discussions or potential collaborations, you may contact Michael Boemo at mb915@cam.ac.uk.
