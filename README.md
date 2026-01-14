@@ -31,11 +31,13 @@ The documentation includes:
 
 # Installation (quick start)
 
-git clone https://github.com/fberkemeier/DNAscape.git  
-cd DNAscape  
-python -m venv .venv  
-source .venv/bin/activate  
-pip install -r requirements.txt  
+```bash
+git clone https://github.com/fberkemeier/DNAscape.git
+cd DNAscape
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
 
 See the documentation for recommended workflows and examples.
 
