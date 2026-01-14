@@ -1,6 +1,4 @@
-<p align="center">
-  <img src="docs/assets/dnascape_logo.png" alt="DNAscape logo" width="420">
-</p>
+<p align='centre'><img src='logo/dnascape_logo.png' alt='Overview.' width='80%'> </p>
 
 # DNAscape
 
