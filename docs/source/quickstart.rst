@@ -6,6 +6,13 @@ infer a firing-rate profile, and run a stochastic simulation to generate
 derived quantities such as replication timing, origin efficiency, inter-origin distances, and the
 replicated fraction.
 
+After :doc:`installation`, the quickest way to follow this example is to open the corresponding
+notebook directly from the repository root:
+
+.. code-block:: bash
+
+   jupyter notebook notebooks/DNAscape_examples.ipynb
+
 Mapping replication timing to firing rate
 -----------------------------------------
 

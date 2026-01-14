@@ -1,0 +1,10 @@
+LICENSE
+README.md
+pyproject.toml
+dnascape/__init__.py
+dnascape/core.py
+dnascape.egg-info/PKG-INFO
+dnascape.egg-info/SOURCES.txt
+dnascape.egg-info/dependency_links.txt
+dnascape.egg-info/requires.txt
+dnascape.egg-info/top_level.txt

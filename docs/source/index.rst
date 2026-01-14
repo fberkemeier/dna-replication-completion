@@ -37,6 +37,8 @@ Publications
 
 If you use DNAscape for your research, please cite the publication appropriate for the version you used:
 
+- Berkemeier, F. DNAscape [Computer software]. https://github.com/fberkemeier/DNAscape
+
 Bugs, Questions, and Comments
 -----------------------------------------
 
