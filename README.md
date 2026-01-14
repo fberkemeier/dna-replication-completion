@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/dnascape_logo.png" alt="DNAscape logo" width="80%">
+  <img src="docs/assets/dnascape_logo.png" alt="DNAscape logo" width="50%">
 </p>
 
 # DNAscape
