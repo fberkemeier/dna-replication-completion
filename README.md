@@ -52,13 +52,12 @@ See the documentation for recommended workflows and examples.
 Citation
 --------
 
-If you use DNAscape in your research, please cite the associated preprint or publication (details to be added).
-A CITATION.cff file will be provided to support standard citation workflows.
+If you use DNAscape in your research, please cite our publication:
 
 ------------------------------------------------------------
 
 Questions, bugs, and feature requests
 -------------------------------------
 
-If you encounter bugs or have questions regarding usage, please open an issue on [GitHub](https://github.com/fberkemeier/DNAscape/issues).
-For more detailed discussions or potential collaborations, you may contact Francisco Berkemeier at fp409@cam.ac.uk.
+If you encounter bugs or have questions regarding usage, you may open a [GitHub issue](https://github.com/fberkemeier/DNAscape/issues).
+For more detailed discussions or potential collaborations, please contact Francisco Berkemeier at fp409@cam.ac.uk.
