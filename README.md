@@ -61,4 +61,4 @@ Questions, bugs, and feature requests
 -------------------------------------
 
 If you encounter bugs or have questions regarding usage, please open an issue on GitHub.
-For more detailed discussions or potential collaborations, you may contact Michael Boemo at mb915@cam.ac.uk.
+For more detailed discussions or potential collaborations, you may contact Francisco Berkemeier at fp409@cam.ac.uk.
