@@ -26,7 +26,7 @@ Key features
 Documentation
 -------------
 
-Full documentation, including installation instructions, tutorials, and API reference, is available in the [Documentation].
+Full documentation, including installation instructions, tutorials, and API reference, is available in the [Documentation](https://dnascape.readthedocs.io/en/latest/).
 
 The documentation includes:
 - Installation and environment setup
@@ -60,5 +60,5 @@ A CITATION.cff file will be provided to support standard citation workflows.
 Questions, bugs, and feature requests
 -------------------------------------
 
-If you encounter bugs or have questions regarding usage, please open an issue on GitHub.
+If you encounter bugs or have questions regarding usage, please open an issue on [GitHub](https://github.com/fberkemeier/DNAscape/issues).
 For more detailed discussions or potential collaborations, you may contact Francisco Berkemeier at fp409@cam.ac.uk.
