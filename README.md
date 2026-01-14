@@ -2,8 +2,10 @@
   <img src="docs/assets/dnascape_logo.png" alt="DNAscape logo" width="50%">
 </p>
 
-DNAscape
+#DNAscape
 ========
+[![Documentation Status](https://readthedocs.org/projects/dnascape/badge/?version=latest)](https://dnascape.readthedocs.io/en/latest/?badge=latest)
+
 
 DNAscape is a computational framework for simulating, mapping, and analysing DNA replication kinetics at genome scale.
 It provides a unified modelling environment to relate replication origin activity, fork propagation, and replication timing through explicit mechanistic assumptions.
