@@ -89,7 +89,6 @@ Users who prefer more explicit imports may instead write:
 
 .. code-block:: python
 
-   import dnascape
    from dnascape import simulate_replication
 
 depending on their workflow.
