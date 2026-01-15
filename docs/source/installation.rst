@@ -1,7 +1,7 @@
 Installation
 ============
 
-DNAscape is currently distributed via its GitHub repository:
+DNAscape is currently distributed via GitHub and can be installed from source.:
 
 https://github.com/fberkemeier/DNAscape
 
