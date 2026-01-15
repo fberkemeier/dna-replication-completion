@@ -11,7 +11,7 @@ notebook directly from the repository root:
 
 .. code-block:: bash
 
-   python -m notebook examples/DNAscape_examples.ipynb
+   python -m jupyterlab examples/DNAscape_examples.ipynb
 
 Mapping replication timing to firing rate
 -----------------------------------------

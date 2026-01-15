@@ -6,10 +6,11 @@
 
 [![Documentation Status](https://readthedocs.org/projects/dnascape/badge/?version=latest)](https://dnascape.readthedocs.io/en/latest/)
 
-DNAscape is a computational framework for simulating, mapping, and analysing DNA replication kinetics at genome scale.
-It provides a unified modelling environment to relate replication origin activity, fork propagation, and replication timing through explicit mechanistic assumptions.
+DNAscape is a computational framework for simulating, mapping, and analysing DNA replication kinetics at genome scale. It provides a unified modelling environment that links replication origin activity, fork propagation, and replication timing through explicit mechanistic assumptions.
 
-DNAscape supports both data integration and hypothesis-driven modelling by enabling experimental replication datasets to be mapped onto a common kinetic representation, and by allowing systematic comparison of alternative mechanistic descriptions of replication dynamics.
+DNAscape integrates experimental replication datasets such as Repli-seq, SNS-seq, OK-seq, and related assays into a common kinetic representation. This enables genome-wide reconstruction of DNA replication programmes and supports the inference of key replication features, including origin firing rates and efficiency, fork directionality, fork speed distributions, inter-origin distances, and the temporal progression of replication.
+
+In addition to data integration, DNAscape supports hypothesis-driven modelling of DNA replication dynamics. Users can simulate alternative mechanistic scenarios, test assumptions about origin firing regulation or fork dynamics, and assess how changes in replication kinetics reshape replication timing and overall genome replication programmes. DNAscape is intended as a reusable research software framework for quantitative inference, mechanistic testing, and predictive modelling of DNA replication kinetics.
 
 # Key features
 
