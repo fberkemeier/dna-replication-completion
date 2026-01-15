@@ -79,7 +79,7 @@ or JupyterLab
 
 
 Open one of the example notebooks (for instance,
-``notebooks/DNAscape_tests.ipynb``) and run the cells sequentially
+``examples/DNAscape_tests.ipynb``) and run the cells sequentially
 (see :doc:`quickstart` for a first look). DNAscape is provided as a standard Python package. Once installed, it can be
 imported directly in notebooks and scripts.
 
