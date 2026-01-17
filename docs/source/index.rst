@@ -1,13 +1,7 @@
-
-.. image:: assets/dnascape_logo.svg
+.. image:: ../assets/dnascape_logo.svg
    :align: center
    :width: 60%
 
-
-DNAscape
-========
-
-Software for simulating and mapping DNA replication kinetics.
 
 .. toctree::
    :maxdepth: 1
