@@ -29,6 +29,7 @@ The framework integrates replication datasets such as Repli-seq, SNS-seq, and OK
 ```bash
 git clone https://github.com/fberkemeier/DNAscape.git
 cd DNAscape
+pip install -r requirements.txt
 pip install -e .
 ```
 
