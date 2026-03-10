@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/dnascape_logo.svg" alt="DNAscape logo" width="50%">
+  <img src="docs/source/_static/dnascape_logo.svg" alt="DNAscape logo" width="50%">
 </p>
 
 # DNAscape
@@ -10,7 +10,7 @@ DNAscape is a computational framework for simulating, mapping, and analysing DNA
 
 This framework integrates replication datasets such as Repli-seq, SNS-seq, OK-seq, and related assays into a mathematically grounded kinetic framework, enabling genome-wide reconstruction of replication programmes and inference of core replication features. Importantly, it supports hypothesis-driven modelling, allowing users to simulate alternative mechanistic scenarios, test assumptions about origin firing or fork behaviour, and quantify how changes in kinetics reshape genome-wide replication dynamics.
 
-Full details of the DNAscape framework, together with worked examples and tutorials, are available in the [Documentation](https://github.com/fberkemeier/DNAscape-dev/blob/main/docs/build/html/index.html).
+Full details of the DNAscape framework, together with worked examples and tutorials, are available in the [Documentation](https://dnascape.readthedocs.io/en/latest/).
 
 ## Key features
 
@@ -26,7 +26,7 @@ Full details of the DNAscape framework, together with worked examples and tutori
 
 ## Documentation
 
-Full documentation, including installation instructions, tutorials, and API reference, is available in the [Documentation](https://github.com/fberkemeier/DNAscape-dev/blob/main/docs/build/html/index.html).
+Full documentation, including installation instructions, tutorials, and API reference, is available in the [Documentation](https://dnascape.readthedocs.io/en/latest/).
 
 The documentation includes:
 - Installation and environment setup

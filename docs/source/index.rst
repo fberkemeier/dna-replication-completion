@@ -1,4 +1,4 @@
-.. image:: ../assets/dnascape_logo.svg
+.. image:: _static/dnascape_logo.svg
    :align: center
    :width: 60%
 

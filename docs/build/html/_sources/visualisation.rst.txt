@@ -1,7 +1,0 @@
-Visualisation
-============
-
-This section
-
-Models
----------------------
