@@ -39,6 +39,42 @@ pip install -e .
 from dnascape import *
 ```
 
+## Command-line usage
+
+After installation, the `dnascape` command is available:
+
+```bash
+dnascape --help
+```
+
+Examples:
+
+```bash
+# Plot two arrays with shared x-axis
+dnascape plotf \
+  --arrays frep.npy forka.npy \
+  --x-array time.npy \
+  --labels "Replicated fraction" "Active forks" \
+  --dual-axis \
+  --xtitle "Time (min)" \
+  --output quick_plot.png
+
+# Run stochastic simulation and save all outputs to NPZ
+dnascape rsim \
+  --ori-rate frates.npy \
+  --sim-number 100 \
+  --time-statsQ \
+  --time-stats-xtQ \
+  --output simres.npz
+
+# Run mapping fit and save output
+dnascape rfit \
+  --d1 firing_rate \
+  --d2 replication_timing \
+  --source frates.npy \
+  --output rfit_out.txt
+```
+
 ## Documentation
 
 Full documentation (installation details, tutorials, conceptual background, and API reference):
