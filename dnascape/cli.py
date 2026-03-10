@@ -4,200 +4,384 @@ from __future__ import annotations
 
 import argparse
 import ast
+import importlib
+import importlib.metadata
+import inspect
 import json
+import re
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
-import numpy as np
-
-from .fitting import rfit
-from .plotting import plotf
-from .simulation import rsim
+PACKAGE_NAME = "dnascape"
+MODULE_SKIP = {"__init__", "cli", "core", "constants"}
 
 
-def _load_array(spec: str) -> np.ndarray:
-    """Load a 1D/2D numeric array from file path, JSON/Python literal, or comma list."""
-    p = Path(spec)
-    if p.exists():
-        if p.suffix.lower() == ".npy":
-            return np.asarray(np.load(p), dtype=float)
-        if p.suffix.lower() in {".txt", ".csv"}:
-            return np.asarray(np.loadtxt(p, delimiter="," if p.suffix.lower() == ".csv" else None), dtype=float)
-        raise ValueError(f"Unsupported file extension for array input: {p.suffix}")
+@dataclass(frozen=True)
+class ParameterSpec:
+    name: str
+    kind: str  # "posonly" | "arg" | "kwonly" | "vararg" | "varkw"
+    has_default: bool
+    default_repr: str | None = None
 
-    # Try JSON / Python literal first
+
+@dataclass(frozen=True)
+class FunctionSpec:
+    module: str
+    name: str
+    command: str
+    summary: str
+    parameters: tuple[ParameterSpec, ...]
+
+
+def _package_dir() -> Path:
+    return Path(__file__).resolve().parent
+
+
+def _project_root() -> Path:
+    return _package_dir().parent
+
+
+def _import_numpy():
     try:
-        val = json.loads(spec)
-        return np.asarray(val, dtype=float)
-    except Exception:
-        pass
-    try:
-        val = ast.literal_eval(spec)
-        return np.asarray(val, dtype=float)
-    except Exception:
-        pass
+        import numpy as np
 
-    # Fallback: comma-separated values
-    try:
-        return np.asarray([float(x.strip()) for x in spec.split(",") if x.strip()], dtype=float)
+        return np
     except Exception as exc:
-        raise ValueError(f"Could not parse array input: {spec}") from exc
+        raise RuntimeError(
+            "NumPy is required for array file parsing (.npy/.npz/.txt/.csv). "
+            "Install project requirements first."
+        ) from exc
 
 
-def _load_optional_array(spec: str | None):
-    return None if spec is None else _load_array(spec)
+def _package_version() -> str:
+    try:
+        return importlib.metadata.version(PACKAGE_NAME)
+    except importlib.metadata.PackageNotFoundError:
+        pyproject = _project_root() / "pyproject.toml"
+        if pyproject.exists():
+            match = re.search(
+                r'^\s*version\s*=\s*["\']([^"\']+)["\']',
+                pyproject.read_text(encoding="utf-8"),
+                flags=re.MULTILINE,
+            )
+            if match:
+                return match.group(1)
+    return "0+unknown"
 
 
-def _save_rsim_npz(out_path: Path, result: dict):
-    payload = {}
-    for k, v in result.items():
-        if v is None:
+def _default_repr(node: ast.AST | None) -> str | None:
+    if node is None:
+        return None
+    try:
+        return ast.unparse(node)
+    except Exception:
+        return None
+
+
+def _summary_from_doc(node: ast.FunctionDef) -> str:
+    doc = ast.get_docstring(node)
+    if not doc:
+        return ""
+    return doc.strip().splitlines()[0].strip()
+
+
+def _parameter_specs(node: ast.FunctionDef) -> list[ParameterSpec]:
+    specs: list[ParameterSpec] = []
+    posonly = list(node.args.posonlyargs)
+    pos_or_kw = list(node.args.args)
+    all_pos = posonly + pos_or_kw
+    all_defaults = [None] * (len(all_pos) - len(node.args.defaults)) + list(node.args.defaults)
+
+    for idx, (arg_node, default_node) in enumerate(zip(all_pos, all_defaults)):
+        kind = "posonly" if idx < len(posonly) else "arg"
+        specs.append(
+            ParameterSpec(
+                name=arg_node.arg,
+                kind=kind,
+                has_default=default_node is not None,
+                default_repr=_default_repr(default_node),
+            )
+        )
+
+    if node.args.vararg is not None:
+        specs.append(ParameterSpec(name=node.args.vararg.arg, kind="vararg", has_default=False))
+
+    for kw_arg, kw_default in zip(node.args.kwonlyargs, node.args.kw_defaults):
+        specs.append(
+            ParameterSpec(
+                name=kw_arg.arg,
+                kind="kwonly",
+                has_default=kw_default is not None,
+                default_repr=_default_repr(kw_default),
+            )
+        )
+
+    if node.args.kwarg is not None:
+        specs.append(ParameterSpec(name=node.args.kwarg.arg, kind="varkw", has_default=False))
+
+    return specs
+
+
+def discover_functions() -> dict[str, FunctionSpec]:
+    discovered: list[FunctionSpec] = []
+    pkg_dir = _package_dir()
+
+    for path in sorted(pkg_dir.glob("*.py")):
+        module = path.stem
+        if module in MODULE_SKIP:
             continue
-        if isinstance(v, list):
-            payload[k] = np.asarray(v)
+
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+
+        for node in tree.body:
+            if not isinstance(node, ast.FunctionDef):
+                continue
+            if node.name.startswith("_"):
+                continue
+
+            discovered.append(
+                FunctionSpec(
+                    module=module,
+                    name=node.name,
+                    command=node.name,
+                    summary=_summary_from_doc(node),
+                    parameters=tuple(_parameter_specs(node)),
+                )
+            )
+
+    by_name: dict[str, list[FunctionSpec]] = {}
+    for spec in discovered:
+        by_name.setdefault(spec.name, []).append(spec)
+
+    result: dict[str, FunctionSpec] = {}
+    for same_name_specs in by_name.values():
+        if len(same_name_specs) == 1:
+            spec = same_name_specs[0]
+            result[spec.command] = spec
+            continue
+
+        for spec in same_name_specs:
+            command = f"{spec.module}-{spec.name}"
+            result[command] = FunctionSpec(
+                module=spec.module,
+                name=spec.name,
+                command=command,
+                summary=spec.summary,
+                parameters=spec.parameters,
+            )
+
+    return dict(sorted(result.items(), key=lambda item: item[0]))
+
+
+def _is_bool_default(default_repr: str | None) -> bool:
+    return default_repr in {"True", "False"}
+
+
+def _param_flag(name: str) -> str:
+    return "--" + name.replace("_", "-").lower()
+
+
+def _add_parameter_argument(parser: argparse.ArgumentParser, param: ParameterSpec) -> None:
+    help_default = ""
+    if param.has_default and param.default_repr is not None:
+        help_default = f" (default: {param.default_repr})"
+
+    if param.kind == "varkw":
+        parser.add_argument(
+            _param_flag(param.name),
+            dest=param.name,
+            default=argparse.SUPPRESS,
+            help=f"Extra keyword arguments as JSON/Python dict{help_default}",
+        )
+        return
+
+    if param.kind == "vararg":
+        parser.add_argument(
+            _param_flag(param.name),
+            dest=param.name,
+            nargs="+",
+            default=argparse.SUPPRESS,
+            help=f"One or more values for *{param.name}{help_default}",
+        )
+        return
+
+    required = not param.has_default
+    if _is_bool_default(param.default_repr):
+        parser.add_argument(
+            _param_flag(param.name),
+            dest=param.name,
+            action="store_true",
+            default=argparse.SUPPRESS,
+            help=f"Set {param.name}=True{help_default}",
+        )
+        parser.add_argument(
+            "--no-" + param.name.replace("_", "-").lower(),
+            dest=param.name,
+            action="store_false",
+            default=argparse.SUPPRESS,
+            help=f"Set {param.name}=False{help_default}",
+        )
+        return
+
+    parser.add_argument(
+        _param_flag(param.name),
+        dest=param.name,
+        required=required,
+        default=argparse.SUPPRESS,
+        help=f"Value for {param.name}{help_default}",
+    )
+
+
+def _parse_value(value: Any) -> Any:
+    if isinstance(value, list):
+        return [_parse_value(v) for v in value]
+    if not isinstance(value, str):
+        return value
+
+    text = value.strip()
+    lowered = text.lower()
+    if lowered == "none":
+        return None
+    if lowered == "true":
+        return True
+    if lowered == "false":
+        return False
+
+    p = Path(text)
+    if p.exists():
+        suffix = p.suffix.lower()
+        if suffix in {".npy", ".npz", ".txt", ".csv"}:
+            np = _import_numpy()
+            if suffix == ".npy":
+                return np.load(p, allow_pickle=True)
+            if suffix == ".npz":
+                with np.load(p, allow_pickle=True) as payload:
+                    return {k: payload[k] for k in payload.files}
+            delimiter = "," if suffix == ".csv" else None
+            return np.loadtxt(p, delimiter=delimiter)
+        if suffix == ".json":
+            return json.loads(p.read_text(encoding="utf-8"))
+        return str(p)
+
+    try:
+        return json.loads(text)
+    except Exception:
+        pass
+
+    try:
+        return ast.literal_eval(text)
+    except Exception:
+        return value
+
+
+def _prepare_call_arguments(func, parsed: argparse.Namespace) -> tuple[list[Any], dict[str, Any]]:
+    sig = inspect.signature(func)
+    provided = vars(parsed)
+    call_args: list[Any] = []
+    call_kwargs: dict[str, Any] = {}
+
+    for param in sig.parameters.values():
+        if param.name not in provided:
+            continue
+
+        raw_value = provided[param.name]
+        value = _parse_value(raw_value)
+
+        if param.kind == inspect.Parameter.POSITIONAL_ONLY:
+            call_args.append(value)
+        elif param.kind == inspect.Parameter.VAR_POSITIONAL:
+            values = value if isinstance(value, list) else [value]
+            call_args.extend(values)
+        elif param.kind == inspect.Parameter.VAR_KEYWORD:
+            if not isinstance(value, dict):
+                flag = _param_flag(param.name)
+                raise TypeError(f"{flag} must parse to a dict, got {type(value).__name__}.")
+            call_kwargs.update(value)
         else:
-            payload[k] = np.asarray(v)
-    np.savez_compressed(out_path, **payload)
+            call_kwargs[param.name] = value
+
+    return call_args, call_kwargs
 
 
-def cmd_plotf(args: argparse.Namespace) -> int:
-    # Headless backend for CLI plotting
-    import matplotlib
+def _resolve_function(spec: FunctionSpec):
+    if spec.module == "plotting":
+        import matplotlib
 
-    matplotlib.use("Agg")
+        matplotlib.use("Agg", force=True)
 
-    y_arrays = [_load_array(s) for s in args.arrays]
+    module = importlib.import_module(f".{spec.module}", PACKAGE_NAME)
+    func = getattr(module, spec.name, None)
+    if func is None or not callable(func):
+        raise AttributeError(f"Could not load callable {spec.module}.{spec.name}.")
+    return func
 
-    if args.x_array is None:
-        x_arg = None
-    elif len(args.x_array) == 1:
-        x_arg = _load_array(args.x_array[0])
-    else:
-        x_arg = [_load_array(s) for s in args.x_array]
 
-    save_q = args.output is not None
-    if save_q:
-        out = Path(args.output)
-        sname = out.stem
-        ext = out.suffix.lstrip(".") or "png"
-    else:
-        sname = args.sname
-        ext = args.ext
+def _print_result(result: Any) -> None:
+    if result is None:
+        return
 
-    plotf(
-        *y_arrays,
-        labels=args.labels,
-        x_array=x_arg,
-        dual_axis=args.dual_axis,
-        xtitle=args.xtitle,
-        ytitle=args.ytitle,
-        title=args.title,
-        resolution=args.resolution,
-        saveQ=save_q,
-        sname=sname,
-        ext=ext,
-        showQ=not save_q,
+    try:
+        np = _import_numpy()
+        if isinstance(result, np.ndarray):
+            print(f"ndarray(shape={result.shape}, dtype={result.dtype})")
+            return
+    except Exception:
+        pass
+
+    if isinstance(result, dict):
+        keys = ", ".join(map(str, result.keys()))
+        print(f"dict(keys=[{keys}])")
+        return
+
+    print(result)
+
+
+def build_parser(functions: dict[str, FunctionSpec] | None = None) -> argparse.ArgumentParser:
+    functions = discover_functions() if functions is None else functions
+
+    parser = argparse.ArgumentParser(
+        prog="dnascape",
+        description="DNAscape command-line interface",
     )
-    return 0
-
-
-def cmd_rsim(args: argparse.Namespace) -> int:
-    ori_rate = _load_array(args.ori_rate)
-    fork_speed = _load_array(args.fork_speed) if args.fork_speed is not None else 1.4
-
-    result = rsim(
-        ori_rate=ori_rate,
-        fork_speed=fork_speed,
-        sim_number=args.sim_number,
-        resolution_space=args.resolution_space,
-        resolution_time=args.resolution_time,
-        perQ=args.perQ,
-        stall_rate=args.stall_rate,
-        tau=args.tau,
-        time_statsQ=args.time_statsQ,
-        time_stats_xtQ=args.time_stats_xtQ,
-        verbose=not args.quiet,
+    parser.add_argument(
+        "-v",
+        "--version",
+        action="version",
+        version=f"%(prog)s {_package_version()}",
     )
-    out = Path(args.output)
-    _save_rsim_npz(out, result)
-    print(f"Saved rsim output to {out}")
-    return 0
 
+    subparsers = parser.add_subparsers(dest="command", required=True)
 
-def cmd_rfit(args: argparse.Namespace) -> int:
-    source = _load_optional_array(args.source)
-    result = rfit(
-        d1=args.d1,
-        d2=args.d2,
-        cell_line=args.cell_line,
-        chr_number=args.chr_number,
-        fork_speed=args.fork_speed,
-        resolution=args.resolution,
-        source=[] if source is None else source,
-        saveQ=args.saveQ,
-    )
-    if args.output:
-        out = Path(args.output)
-        np.savetxt(out, np.asarray(result, dtype=float))
-        print(f"Saved rfit output to {out}")
-    return 0
+    for command, spec in functions.items():
+        desc = f"{spec.module}.{spec.name}"
+        if spec.summary:
+            desc = f"{desc}: {spec.summary}"
 
+        sub = subparsers.add_parser(
+            command,
+            help=desc,
+            description=desc,
+        )
+        sub.set_defaults(_spec=spec)
 
-def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="dnascape", description="DNAscape command-line interface")
-    sub = p.add_subparsers(dest="command", required=True)
+        for param in spec.parameters:
+            _add_parameter_argument(sub, param)
 
-    p_plot = sub.add_parser("plotf", help="Plot one or more arrays")
-    p_plot.add_argument("--arrays", nargs="+", required=True, help="Y arrays (files, JSON, or comma list)")
-    p_plot.add_argument(
-        "--x-array",
-        nargs="+",
-        help="Either one shared X array or one X array per Y array (files, JSON, or comma list)",
-    )
-    p_plot.add_argument("--labels", nargs="*", default=None, help="Legend labels")
-    p_plot.add_argument("--dual-axis", action="store_true", help="Use dual y-axis (requires exactly two arrays)")
-    p_plot.add_argument("--xtitle", default="Index")
-    p_plot.add_argument("--ytitle", default="Value")
-    p_plot.add_argument("--title", default="")
-    p_plot.add_argument("--resolution", type=float, default=1.0)
-    p_plot.add_argument("--output", default=None, help="Output figure path (e.g., out.png). If omitted, shows plot.")
-    p_plot.add_argument("--sname", default="test", help="Fallback figure name when --output is not used")
-    p_plot.add_argument("--ext", default="png", help="Fallback figure extension when --output is not used")
-    p_plot.set_defaults(func=cmd_plotf)
-
-    p_sim = sub.add_parser("rsim", help="Run replication simulation")
-    p_sim.add_argument("--ori-rate", required=True, help="Origin-rate array input (file/JSON/comma list)")
-    p_sim.add_argument("--fork-speed", default=None, help="Fork-speed scalar/array input (file/JSON/comma list)")
-    p_sim.add_argument("--sim-number", type=int, default=50)
-    p_sim.add_argument("--resolution-space", type=float, default=1.0)
-    p_sim.add_argument("--resolution-time", type=float, default=1.0)
-    p_sim.add_argument("--perQ", action="store_true")
-    p_sim.add_argument("--stall-rate", type=float, default=0.0)
-    p_sim.add_argument("--tau", type=float, default=np.inf)
-    p_sim.add_argument("--time-statsQ", action="store_true")
-    p_sim.add_argument("--time-stats-xtQ", action="store_true")
-    p_sim.add_argument("--quiet", action="store_true")
-    p_sim.add_argument("--output", default="rsim_output.npz", help="Path to npz output")
-    p_sim.set_defaults(func=cmd_rsim)
-
-    p_fit = sub.add_parser("rfit", help="Map one data type to another")
-    p_fit.add_argument("--d1", default="firing_rate")
-    p_fit.add_argument("--d2", default="replication_timing")
-    p_fit.add_argument("--cell-line", default="H1")
-    p_fit.add_argument("--chr-number", type=int, default=1)
-    p_fit.add_argument("--fork-speed", type=float, default=1.4)
-    p_fit.add_argument("--resolution", type=float, default=1.0)
-    p_fit.add_argument("--source", default=None, help="Optional input array (file/JSON/comma list)")
-    p_fit.add_argument("--saveQ", action="store_true")
-    p_fit.add_argument("--output", default=None, help="Optional txt output path")
-    p_fit.set_defaults(func=cmd_rfit)
-
-    return p
+    return parser
 
 
 def main(argv=None) -> int:
-    parser = build_parser()
-    args = parser.parse_args(argv)
-    return int(args.func(args))
+    functions = discover_functions()
+    parser = build_parser(functions=functions)
+    parsed = parser.parse_args(argv)
+
+    spec: FunctionSpec = parsed._spec
+    func = _resolve_function(spec)
+    call_args, call_kwargs = _prepare_call_arguments(func, parsed)
+    result = func(*call_args, **call_kwargs)
+    _print_result(result)
+    return 0
 
 
 if __name__ == "__main__":
