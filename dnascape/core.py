@@ -59,6 +59,30 @@ from math import erf, sqrt, exp, pi
 from collections import defaultdict
 from scipy.fft import rfft, irfft
 
+
+_MODULE_ROOT = Path(__file__).resolve().parent
+_PROJECT_ROOT = _MODULE_ROOT.parent
+
+
+def _resolve_data_path(relative_path, for_write=False):
+    rel = Path(relative_path)
+    if for_write:
+        target = Path('data') / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        return target
+
+    search_bases = (
+        Path('data'),
+        Path('examples/data'),
+        _PROJECT_ROOT / 'data',
+        _PROJECT_ROOT / 'examples' / 'data',
+    )
+    for base in search_bases:
+        cand = base / rel
+        if cand.exists():
+            return cand
+    return Path('data') / rel
+
 for folder in (
     Path("figures"),
     Path("data/firing_rate"),
@@ -85,19 +109,19 @@ for folder in (
 # %%
 def load(d='replication_timing', cell_line='H1', chr_number=1, example='hESC'):
     if d != 'example':
-        data = np.loadtxt(f"data/{mapt[d]}/{mapt[d]}_{cell_line}_chr{chr_number}.txt", dtype=float)
+        data = np.loadtxt(_resolve_data_path(f"{mapt[d]}/{mapt[d]}_{cell_line}_chr{chr_number}.txt"), dtype=float)
     else:
-        data = np.loadtxt(f"data/{mapt[d]}/{example}_chr{chr_number}.txt", dtype=float)
+        data = np.loadtxt(_resolve_data_path(f"{mapt[d]}/{example}_chr{chr_number}.txt"), dtype=float)
     return data
 
 # %%
 def loadcsv(d='replication_timing', cell_line='H1', chr_number=1, example='hESC', region='region'):
     if d == 'example':
-        fname = f"data/{mapt[d]}/{example}.csv"
+        fname = _resolve_data_path(f"{mapt[d]}/{example}.csv")
     elif d == 'region':
-        fname = f"data/{mapt[d]}/{region}.csv"
+        fname = _resolve_data_path(f"{mapt[d]}/{region}.csv")
     else:
-        fname = f"data/{mapt[d]}/{mapt[d]}_{cell_line}.csv"
+        fname = _resolve_data_path(f"{mapt[d]}/{mapt[d]}_{cell_line}.csv")
     df = pd.read_csv(fname)
     col = f"chr{chr_number}"
     if col not in df.columns:
@@ -108,13 +132,13 @@ def loadcsv(d='replication_timing', cell_line='H1', chr_number=1, example='hESC'
 # %%
 def savetxt(arr, stitle='save_example', outpath="output"):
     np.savetxt(
-        f"data/{outpath}/{stitle}.txt",
+        _resolve_data_path(f"{outpath}/{stitle}.txt", for_write=True),
         np.asarray(arr, float)
     )
 
 # %%
 def savecsv(arr, chr_number, stitle='save_example', outpath="output"):
-    fname = Path(f"data/{outpath}/{stitle}.csv")
+    fname = _resolve_data_path(f"{outpath}/{stitle}.csv", for_write=True)
     col = f"chr{chr_number}"
     arr = np.asarray(arr, float)
     df = pd.read_csv(fname) if fname.exists() else pd.DataFrame()
