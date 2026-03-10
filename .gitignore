@@ -4,7 +4,5 @@ __pycache__/
 *.pyc
 *.egg-info/
 
-# Sphinx build output (do not commit)
-docs/build/
 
 pyproject.toml
