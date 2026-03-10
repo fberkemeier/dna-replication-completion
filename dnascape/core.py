@@ -1,28 +1,36 @@
-# ---
-# jupyter:
-#   jupytext:
-#     text_representation:
-#       extension: .py
-#       format_name: percent
-#       format_version: '1.3'
-#       jupytext_version: 1.18.1
-#   kernelspec:
-#     display_name: Python 3 (ipykernel)
-#     language: python
-#     name: python3
-# ---
+﻿# Auto-generated from dnascape/DNAscape_v0.1.3.ipynb
 
 # %% [markdown]
 # # DNAscape
 # Toolkit for simulating and mapping DNA replication kinetics.
 #
-# Build 0.0.9:
+# Build 0.1.3:
 #
+# - FIX PERIODIC FIT ON SMALL DOMAINS!!!
 # - Add misfits examples
+# - Optimize genes/sequence imports
 # - Add circular plot for periodic
 # - Option to export as bedgraph, bigwig (and Genome browser examples)
 # - Add time-dependent initiation and fork speed
 # - Add ETA to map firing to timing
+# - Add example with Repli-seq and Ini-seq/SNS-seq
+# - Change global style (colours and text)
+# - Make it accept both csv and bedgraph
+# - Add quicker responsiveness in rfit
+# - Make the gene plot a big feature highlight
+# - Make stall rate take also arrays
+# - Add stochastic and deterministic options for both I and v
+# - Add function option for I and v
+# - Add possibility of fixed (frozen) regions for I and v (?)
+# - Add option for sequence display (colour coded, with gene plots)
+# - Add bash option for arguments
+# - Add heatmap plotting function
+# - Add observed initiation, fork speed, and coalescence for heatmaps
+# - Add title option to all plot functions
+# - Add log scale options to heatmap plot function
+# - Include StreamLit application for uploading, downloading, and zoom in verison
+# - Optimize all code (rsim, options for events/frep), standardize, and comment where needed (minimal)
+# - Create speed benchmarks
 
 # %% [markdown]
 # ## Imports and configuration
@@ -43,8 +51,11 @@ import matplotlib.ticker as mticker
 from scipy import stats
 from scipy.integrate import cumulative_trapezoid
 from scipy.stats import gaussian_kde, mode
+from scipy.ndimage import zoom
 import gzip
 import re
+import tempfile
+from math import erf, sqrt, exp, pi
 from collections import defaultdict
 from scipy.fft import rfft, irfft
 
@@ -61,11 +72,14 @@ for folder in (
 ):
     folder.mkdir(parents=True, exist_ok=True)
 
+# Colours
+# Red: a10000ff
+# Blue: 2e7aa0ff
 
 # %% [markdown]
 # ## Utility functions
 
-# %% [markdown] jp-MarkdownHeadingCollapsed=true
+# %% [markdown]
 # ### Data management
 
 # %%
@@ -75,7 +89,6 @@ def load(d='replication_timing', cell_line='H1', chr_number=1, example='hESC'):
     else:
         data = np.loadtxt(f"data/{mapt[d]}/{example}_chr{chr_number}.txt", dtype=float)
     return data
-
 
 # %%
 def loadcsv(d='replication_timing', cell_line='H1', chr_number=1, example='hESC', region='region'):
@@ -92,15 +105,12 @@ def loadcsv(d='replication_timing', cell_line='H1', chr_number=1, example='hESC'
     data = df[col].dropna().to_numpy(dtype=float)
     return data
 
-
-
 # %%
 def savetxt(arr, stitle='save_example', outpath="output"):
     np.savetxt(
         f"data/{outpath}/{stitle}.txt",
         np.asarray(arr, float)
     )
-
 
 # %%
 def savecsv(arr, chr_number, stitle='save_example', outpath="output"):
@@ -118,7 +128,6 @@ def savecsv(arr, chr_number, stitle='save_example', outpath="output"):
     )
     df = df[cols_sorted]
     df.to_csv(fname, index=False)
-
 
 # %%
 def logistic(x, k, x0):
@@ -171,8 +180,6 @@ def bwmap(chrom, cell_line='Rat', bin_size=10_000,
             pass
 
     return interp_nans(rt) if fill_nans else rt
-
-
 
 # %%
 def _parse_gtf_attributes(attr_str: str) -> dict:
@@ -255,7 +262,6 @@ def load_gene_models_from_gtf_gz(
     out = list(genes.values())
     out.sort(key=lambda g: (g["start"], g["end"]))
     return out
-
 
 # %%
 def plot_gene_track(
@@ -368,7 +374,7 @@ def plot_gene_track(
         if show_names:
             name = g.get("gene_name", g["gene_id"])
             if len(name) > max_label_chars:
-                name = name[: max_label_chars - 1] + "…"
+                name = name[: max_label_chars - 1] + "â€¦"
             label = name
             if show_direction and strand in {"+", "-"}:
                 label = f"{name} ({strand})"
@@ -413,16 +419,15 @@ def plot_gene_track(
     ax.grid(True, axis="x", linewidth=0.5)
     return ax
 
-
-
-# %% [markdown] jp-MarkdownHeadingCollapsed=true
+# %% [markdown]
 # ### Plotting
 
 # %%
 def plotf(*arrays, labels=None, x_array=None, dual_axis=False, resolution=1, region_high=None, rname='Region',
-          invyQ=False, figsize=(10,4), xlims=(None,None), ylims=(None,None), xtitle='Index', ytitle='Value',
-          x_show=True, y_show=True, logyQ=False, scale_matchQ=False, saveQ=False, sname='test', ext='pdf',
-          layout_rect=(0.12, 0.15, 0.98, 0.95), fig=None, ax=None, showQ=True):
+          invyQ=False, figsize=(10, 4), xlims=(None, None), ylims=(None, None), title='',
+          xtitle='Index', ytitle='Value', x_show=True, y_show=True, logyQ=False, logxQ=False,
+          scale_matchQ=False, saveQ=False, sname='test', ext='pdf', layout_rect=(0.12, 0.15, 0.98, 0.95),
+          fig=None, ax=None, showQ=True):
 
     arrays = [np.asarray(a) for a in arrays]
     n = len(arrays)
@@ -475,14 +480,20 @@ def plotf(*arrays, labels=None, x_array=None, dual_axis=False, resolution=1, reg
         fig_.subplots_adjust(left=layout_rect[0], bottom=layout_rect[1],
                              right=layout_rect[2], top=layout_rect[3])
 
+    created_axes = ax is None
+
     if n == 2 and dual_axis:
         if ax is None:
-            fig, ax1 = plt.subplots(figsize=figsize) if fig is None else (fig, fig.add_subplot(111))
+            if fig is None:
+                fig, ax1 = plt.subplots(figsize=figsize)
+            else:
+                ax1 = fig.add_subplot(111)
         else:
             ax1 = ax
-            fig = ax1.figure if fig is None else fig
-        ax2 = ax1.twinx()
+            if fig is None:
+                fig = ax1.figure
 
+        ax2 = ax1.twinx()
         region_handle = draw_region(ax1)
 
         if labels is not None:
@@ -505,6 +516,16 @@ def plotf(*arrays, labels=None, x_array=None, dual_axis=False, resolution=1, reg
         if logyQ2:
             ax2.set_yscale('log')
 
+        if isinstance(logxQ, tuple):
+            logxQ1, logxQ2 = logxQ
+        else:
+            logxQ1 = logxQ2 = bool(logxQ)
+
+        if logxQ1:
+            ax1.set_xscale('log')
+        if logxQ2:
+            ax2.set_xscale('log')
+
         if isinstance(invyQ, tuple):
             invyQ1, invyQ2 = invyQ
         else:
@@ -518,9 +539,15 @@ def plotf(*arrays, labels=None, x_array=None, dual_axis=False, resolution=1, reg
         if scale_matchQ:
             match_yaxis_scales(ax1, ax2, arrays[0], arrays[1])
 
+        ax1.set_xlim(xlims)
+        ax1.set_ylim(ylims if not isinstance(ylims, tuple) else ylims[0])
+        ax2.set_ylim(ylims if not isinstance(ylims, tuple) else ylims[1])
+
         ax1.set_xlabel(xtitle)
         ax1.set_ylabel(lab1 if lab1 is not None else ytitle, color='tab:blue')
         ax2.set_ylabel(lab2 if lab2 is not None else ytitle, color='tab:red')
+
+        ax1.set_title(title)
 
         if show_labels:
             handles = []
@@ -550,7 +577,7 @@ def plotf(*arrays, labels=None, x_array=None, dual_axis=False, resolution=1, reg
         _no_offset(ax1)
         _no_offset(ax2)
 
-        if ax is None:
+        if created_axes:
             _apply_layout(fig)
             if saveQ:
                 fig.savefig(f"figures/plot_{sname}.{ext}", bbox_inches="tight")
@@ -560,10 +587,12 @@ def plotf(*arrays, labels=None, x_array=None, dual_axis=False, resolution=1, reg
         return fig, (ax1, ax2)
 
     if ax is None:
-        fig = plt.figure(figsize=figsize) if fig is None else fig
-        ax = plt.gca()
+        if fig is None:
+            fig = plt.figure(figsize=figsize)
+        ax = fig.add_subplot(111)
     else:
-        fig = ax.figure if fig is None else fig
+        if fig is None:
+            fig = ax.figure
 
     region_handle = draw_region(ax)
 
@@ -582,6 +611,8 @@ def plotf(*arrays, labels=None, x_array=None, dual_axis=False, resolution=1, reg
 
     if logyQ:
         ax.set_yscale('log')
+    if logxQ:
+        ax.set_xscale('log')
     if invyQ:
         ax.invert_yaxis()
 
@@ -606,14 +637,14 @@ def plotf(*arrays, labels=None, x_array=None, dual_axis=False, resolution=1, reg
 
     _no_offset(ax)
 
-    if ax is None:
+    ax.set_title(title)
+
+    if created_axes:
         _apply_layout(fig)
         if saveQ:
             fig.savefig(f"figures/plot_{sname}.{ext}", bbox_inches="tight")
         if showQ:
             plt.show()
-
-
 
 # %%
 def mplotf(marrays, mlabels=None, mx_array=None, mdual_axis=None, mresolution=None, mregion_high=None, mrname=None,
@@ -745,8 +776,6 @@ def mplotf(marrays, mlabels=None, mx_array=None, mdual_axis=None, mresolution=No
 
     plt.show()
 
-
-
 # %%
 def ploth(*arrays, labels=None, bin_size=5, alpha=0.5, density=False, statsQ=True,
           figsize=(10,4), xtitle='Index', ytitle='Value', xmax=None, saveQ=False, sname='test', ext='pdf'):
@@ -767,7 +796,7 @@ def ploth(*arrays, labels=None, bin_size=5, alpha=0.5, density=False, statsQ=Tru
         base_label = labels[i] if labels and i < len(labels) else None
 
         if statsQ:
-            stats = f"μ={np.nanmean(arr):.2f}\n σ={np.nanstd(arr):.2f}\n M={np.nanmedian(arr):.2f}"
+            stats = f"Î¼={np.nanmean(arr):.2f}\n Ïƒ={np.nanstd(arr):.2f}\n M={np.nanmedian(arr):.2f}"
             label = (base_label if base_label else "") + stats
         else:
             label = base_label
@@ -791,8 +820,6 @@ def ploth(*arrays, labels=None, bin_size=5, alpha=0.5, density=False, statsQ=Tru
         plt.savefig(f"figures/histogram_{sname}.{ext}", bbox_inches='tight')
     plt.show()
 
-
-
 # %%
 def plotb(array, label=None, resolution=1, figsize=(10,4), xtitle='Index', ytitle='Value', saveQ=False, sname='test', ext='pdf'):
     arr = np.asarray(array)
@@ -811,7 +838,6 @@ def plotb(array, label=None, resolution=1, figsize=(10,4), xtitle='Index', ytitl
     if saveQ:
         plt.savefig(f"figures/barplot_{sname}.{ext}", bbox_inches='tight')
     plt.show()
-
 
 # %%
 def plotd(x, y, frac=0.1, random_state=None, xlabel='X', ylabel='Y', title='Density', figsize=(10,4),
@@ -870,7 +896,6 @@ def plotd(x, y, frac=0.1, random_state=None, xlabel='X', ylabel='Y', title='Dens
     
     plt.show()
 
-
 # %%
 def plotw(*arrays, labels=None, figsize=(10,4), ylims=(None, None),
           xtitle='', ytitle="Value", logyQ=False, invyQ=False,
@@ -927,29 +952,159 @@ def plotw(*arrays, labels=None, figsize=(10,4), ylims=(None, None),
         fig.savefig(f"figures/bplot_{sname}.{ext}", bbox_inches="tight")
     plt.show()
 
+# %%
+def plothm(
+    field,
+    resolution_hm=None,  
+    smooth_type="bicubic", 
+    bscale=None,
+    cmap="viridis",
+    x_ticks=None,
+    t_ticks=None,
+    xtitle="Index (x)",
+    ytitle="Index (y)",
+    ctitle="Value",
+    figsize=(10, 4),
+    xlims=(None, None),
+    ylims=(None, None),
+    invyQ=False,
+    x_show=True,
+    y_show=True,
+    region_high=None,
+    rname="Region",
+    saveQ=False,
+    sname="test",
+    ext="pdf",
+    layout_rect=(0.12, 0.15, 0.98, 0.95),
+    fig=None,
+    ax=None,
+    showQ=True,
+):
+    # 1. Prepare Data
+    F = np.asarray(field, dtype=float)
+    orig_nt, orig_nx = F.shape
 
+    # 2. Handle Resolution Tweak (Resampling)
+    if resolution_hm is not None:
+        zoom_t = resolution_hm / orig_nt
+        zoom_x = resolution_hm / orig_nx
+        F_plot = zoom(F, (zoom_t, zoom_x), order=1)
+        interp_to_use = smooth_type # Use your requested smoothing
+    else:
+        F_plot = F
+        interp_to_use = "nearest" # RAW data rendering: no interpolation
 
-# %% [markdown] jp-MarkdownHeadingCollapsed=true
+    # 3. Handle Ticks
+    if x_ticks is None:
+        x = np.arange(orig_nx, dtype=float)
+    else:
+        x = np.asarray(x_ticks, dtype=float)
+
+    if t_ticks is None:
+        t = np.arange(orig_nt, dtype=float)
+    else:
+        t = np.asarray(t_ticks, dtype=float)
+
+    # 4. Setup Figure/Axes
+    if ax is None:
+        fig, ax = plt.subplots(figsize=figsize) if fig is None else (fig, fig.add_subplot(111))
+    else:
+        fig = ax.figure if fig is None else fig
+
+    # 5. Visibility / Limits Logic
+    xmin, xmax = xlims
+    ymin, ymax = ylims
+    ix = np.ones(orig_nx, dtype=bool)
+    it = np.ones(orig_nt, dtype=bool)
+    if xmin is not None: ix &= x >= xmin
+    if xmax is not None: ix &= x <= xmax
+    if ymin is not None: it &= t >= ymin
+    if ymax is not None: it &= t <= ymax
+
+    F_vis = F[np.ix_(it, ix)]
+    if bscale is None:
+        vmin, vmax = np.nanmin(F_vis), np.nanmax(F_vis)
+    else:
+        vmin, vmax = bscale
+
+    # 6. Draw Region Overlay
+    def draw_region(ax_):
+        if region_high is None: return None
+        rh = np.sort(np.asarray(region_high, dtype=float).ravel())
+        if rh.size == 0: return None
+        dx = np.min(np.diff(x)) if x.size > 1 else 1.0
+        spans, start, prev = [], rh[0], rh[0]
+        for v in rh[1:]:
+            if np.isclose(v, prev + dx):
+                prev = v
+            else:
+                spans.append((start, prev + dx))
+                start = prev = v
+        spans.append((start, prev + dx))
+        h0 = None
+        for a, b in spans:
+            h = ax_.axvspan(a, b, color="lightgrey", alpha=0.4, zorder=1)
+            if h0 is None: h0 = h
+        return h0
+
+    region_handle = draw_region(ax)
+
+    # 7. Render Heatmap
+    im = ax.imshow(
+        F_plot,
+        aspect="auto",
+        origin="lower",
+        interpolation=interp_to_use, # Uses 'nearest' if resolution_hm is None
+        cmap=cmap,
+        vmin=vmin,
+        vmax=vmax,
+        extent=[x[0], x[-1], t[0], t[-1]],
+        zorder=0,
+    )
+
+    # 8. Formatting
+    ax.set_xlabel(xtitle)
+    ax.set_ylabel(ytitle)
+    ax.set_xlim(xlims)
+    ax.set_ylim(ylims)
+    if invyQ: ax.invert_yaxis()
+    if not x_show:
+        ax.set_xlabel("")
+        ax.tick_params(axis="x", bottom=False, labelbottom=False)
+    if not y_show:
+        ax.set_ylabel("")
+        ax.tick_params(axis="y", left=False, labelleft=False)
+
+    cb = fig.colorbar(im, ax=ax)
+    cb.set_label(ctitle)
+
+    if region_handle is not None:
+        ax.legend([region_handle], [rname], loc="upper left")
+
+    fig.subplots_adjust(left=layout_rect[0], bottom=layout_rect[1], 
+                        right=layout_rect[2], top=layout_rect[3])
+
+    if saveQ:
+        fig.savefig(f"figures/heatmap_{sname}.{ext}", bbox_inches="tight")
+
+    if showQ:
+        plt.show()
+
+# %% [markdown]
 # ### Operations
 
 # %%
 def smoothf(data, window=50):
     data = np.asarray(data, float)
-
     n = len(data)
     win = min(window, n)
     kernel = np.ones(win, float) / win
-
     size = n + win - 1
     fft_A = rfft(data, size)
     fft_B = rfft(kernel, size)
-
     conv_full = irfft(fft_A * fft_B, size)
     conv = conv_full[win//2 : win//2 + n]
-
     return conv
-
-
 
 # %%
 # rescale array
@@ -960,7 +1115,6 @@ def rescale(arr, interval):
     if old_max == old_min:
         return np.full_like(arr, (new_min + new_max) / 2.0)
     return (arr - old_min) / (old_max - old_min) * (new_max - new_min) + new_min
-
 
 # %%
 def fast_shift_add(dst, src, shift, perQ=False):
@@ -978,8 +1132,6 @@ def fast_shift_add(dst, src, shift, perQ=False):
             dst[shift:] += src[:-shift]
         else:
             dst[:shift] += src[-shift:]
-
-
 
 # %%
 def match_yaxis_scales(ax1, ax2, y1, y2):
@@ -1008,7 +1160,7 @@ def match_yaxis_scales(ax1, ax2, y1, y2):
     y2_hi = hi * (y2.max() - y2.min()) + y2.min()
 
     # ------------------------------------------------------------------
-    # SAFETY FOR LOG-SCALE AXES — enforce positive bounds > 0
+    # SAFETY FOR LOG-SCALE AXES â€” enforce positive bounds > 0
     # ------------------------------------------------------------------
     eps = 1e-9
     if ax1.get_yscale() == 'log':
@@ -1023,13 +1175,10 @@ def match_yaxis_scales(ax1, ax2, y1, y2):
     ax1.set_ylim(y1_lo, y1_hi)
     ax2.set_ylim(y2_lo, y2_hi)
 
-
-
 # %%
 # Mean squared error between two arrays
 def mean_squared_error(a, b):
     return float(np.mean((a - b) ** 2))
-
 
 # %%
 # convert to H:M:S
@@ -1039,13 +1188,11 @@ def hms(t):
     s = int(t % 60)
     return f"{h:02d}:{m:02d}:{s:02d}"
 
-
 # %%
 def arrint(a, b):
     return np.intersect1d(a, b)
 def arrcomp(a, b):
     return np.setdiff1d(a, b)
-
 
 # %%
 def etaf(it, maxiter, start_time):
@@ -1061,8 +1208,7 @@ def etaferr(it, maxiter, start_time, err):
     eta_sec = sims_left * avg_time_per_sim
     print(f"[{it}/{maxiter}]  Elapsed: {hms(elapsed)}  ETA: {hms(eta_sec)}  MSE: {err:.4e}", end="\r")   
 
-
-# %% [markdown] jp-MarkdownHeadingCollapsed=true
+# %% [markdown]
 # ## Mapping functions
 
 # %%
@@ -1142,7 +1288,7 @@ def map_timing_firing(
             fork_speed=fork_speed,
             resolution=resolution,
             neighbourhood_range=neighbourhood_range,
-            perQ=perQ,
+            perQ=perQ
         )
         mse = mean_squared_error(T[crop], y[crop])
 
@@ -1209,9 +1355,8 @@ def map_timing_firing(
         
     return x
 
-
 # %%
-def map_firing_timing(
+def map_firing_timing0(
     firing_rate,
     fork_speed=1.4,
     resolution=1,
@@ -1239,10 +1384,86 @@ def map_firing_timing(
 
     return y
 
+# %%
+def map_firing_timing0(
+    firing_rate,
+    fork_speed=1.4,
+    resolution=1,
+    neighbourhood_range=2000,
+    perQ=False
+):
+    x = np.asarray(firing_rate, dtype=float)
+    fork_speed_per_bin = fork_speed / resolution
+    L = max(1, int(neighbourhood_range / resolution))
 
+    n = x.size
+    if perQ:
+        L = min(L, n // 2)
+
+    y = np.zeros_like(x)
+    last_raw = np.zeros_like(x)
+    last_exp = np.ones_like(x)
+
+    unitary = x.copy()
+
+    for k in range(L + 1):
+
+        if perQ:
+            unitary = x.copy()
+
+        if k:
+            fast_shift_add(unitary, x,  k, perQ=perQ)
+            fast_shift_add(unitary, x, -k, perQ=perQ)
+
+        exp2_raw = last_raw + unitary / fork_speed_per_bin
+        exp2 = np.exp(-exp2_raw)
+        y += (last_exp - exp2) / np.clip(unitary, 1e-80, None)
+        last_raw, last_exp = exp2_raw, exp2
+
+    return y
 
 # %%
-# T(x) → RFD(x) via RFD = v dT/dx
+def map_firing_timing(
+    firing_rate,
+    fork_speed=1.4,
+    resolution=1,
+    neighbourhood_range=2000,
+    perQ=False
+):
+    x = np.asarray(firing_rate, dtype=float)
+    n = x.size
+    fork_speed_per_bin = fork_speed / resolution
+
+    # Requested neighbourhood radius in bins
+    L_req = max(1, int(neighbourhood_range / resolution))
+
+    # Finite periodic cap to avoid repeated counting on the circle.
+    # Your proposed R = ceil((n-3)/2) equals (n-2)//2 for integers.
+    if perQ:
+        R = max(0, (n - 2) // 2)
+        L = min(L_req, R)
+    else:
+        L = L_req
+
+    y = np.zeros_like(x)
+    last_raw = np.zeros_like(x)
+    last_exp = np.ones_like(x)
+    unitary = x.copy()
+
+    for k in range(L + 1):
+        if k:
+            fast_shift_add(unitary, x,  k, perQ=perQ)
+            fast_shift_add(unitary, x, -k, perQ=perQ)
+
+        exp2_raw = last_raw + unitary / fork_speed_per_bin
+        exp2 = np.exp(-exp2_raw)
+        y += (last_exp - exp2) / np.clip(unitary, 1e-80, None)
+        last_raw, last_exp = exp2_raw, exp2
+
+    return y
+
+# %%
+# T(x) â†’ RFD(x) via RFD = v dT/dx
 def map_timing_directionality(
     timing,
     fork_speed=1.4,
@@ -1256,7 +1477,7 @@ def map_timing_directionality(
     dT_per_bin = np.empty_like(T)
 
     if perQ:
-        # periodic finite difference: wrap last → first
+        # periodic finite difference: wrap last â†’ first
         dT_per_bin[:] = T - np.roll(T, 1)
     else:
         # original non-periodic behaviour
@@ -1274,10 +1495,8 @@ def map_timing_directionality(
 
     return rfd
 
-
-
 # %%
-# RFD(x) → T(x)  via  dT/dx = (1/v) RFD(x)
+# RFD(x) â†’ T(x)  via  dT/dx = (1/v) RFD(x)
 def map_directionality_timing(
     rfd,
     fork_speed=1.4,
@@ -1291,7 +1510,7 @@ def map_directionality_timing(
     # optional smoothing of RFD before integration
     rfd = smoothf(rfd, smoothw)
 
-    # each bin contributes ΔT = (resolution / v) * RFD
+    # each bin contributes Î”T = (resolution / v) * RFD
     dT_per_bin = (resolution / fork_speed) * rfd
 
     if perQ:
@@ -1306,95 +1525,183 @@ def map_directionality_timing(
 
     return T
 
-
-
 # %% [markdown]
 # ## Simulation functions
 
 # %%
 def simulate_replication(
-    fire_rates,
-    resolution=1.0,
-    fork_speed=1.4,
-    fork_speeds=None,
+    ori_rate,
+    fork_speed,
+    resolution_space=1.0,
+    resolution_time=1.0,
     rng=None,
+    perQ=False,
     stall_rate=0.0,
     tau=np.inf,
-    time_statsQ=False,
-    time_grid=None,
-    max_rep_time=1200,
-    perQ=False,
     ffiring_nr=None,
-    ffiring_recycle=0.,
+    ffiring_recycle=0.0,
     ffiring_forkQ=False,
+    time_statsQ=False,
+    time_stats_densQ=False,  # NEW (densities handled in rsim; here kept for API symmetry)
+    time_grid=None,
+    max_rep_time=1200.0,
 ):
-    fire_rates = np.asarray(fire_rates, dtype=float)
-    n = fire_rates.size
     rng = np.random.default_rng() if rng is None else rng
 
-    # ---------------- firing times (unconstrained proposals) ----------------
-    t0 = np.full(n, np.inf, float)
-    mask_pos = fire_rates > 0
-    t0[mask_pos] = rng.exponential(scale=1.0 / fire_rates[mask_pos])
+    resolution_space = float(resolution_space)
+    if not np.isfinite(resolution_space) or resolution_space <= 0:
+        raise ValueError("resolution_space must be a finite positive number.")
 
-    # ---------------- stall sampling ----------------
+    resolution_time = float(resolution_time)
+    if not np.isfinite(resolution_time) or resolution_time <= 0:
+        raise ValueError("resolution_time must be a finite positive number.")
+
+    def _as_rate_field(field, name, n_hint=None):
+        arr = np.asarray(field, dtype=float)
+        if arr.ndim == 0:
+            if not np.isfinite(arr) or arr < 0:
+                raise ValueError(f"{name} scalar must be finite and >= 0.")
+            return "scalar", float(arr), None
+        if arr.ndim == 1:
+            if n_hint is not None and arr.size != n_hint:
+                raise ValueError(f"{name} (n,) must have length {n_hint}, got {arr.size}.")
+            if np.any(~np.isfinite(arr)) or np.any(arr < 0):
+                raise ValueError(f"{name} (n,) must be finite and >= 0.")
+            return "x", arr.astype(float, copy=False), None
+        if arr.ndim == 2:
+            if n_hint is not None and arr.shape[1] != n_hint:
+                raise ValueError(f"{name} (T,n) must have n={n_hint} columns, got {arr.shape[1]}.")
+            if np.any(~np.isfinite(arr)) or np.any(arr < 0):
+                raise ValueError(f"{name} (T,n) must be finite and >= 0.")
+            return "xt", arr.astype(float, copy=False), int(arr.shape[0])
+        raise ValueError(f"{name} must be scalar, (n,), or (T,n).")
+
+    def _as_speed_field(field, name, n_hint=None):
+        arr = np.asarray(field, dtype=float)
+        if arr.ndim == 0:
+            if not np.isfinite(arr) or arr <= 0:
+                raise ValueError(f"{name} scalar must be finite and > 0.")
+            return "scalar", float(arr), None
+        if arr.ndim == 1:
+            if n_hint is not None and arr.size != n_hint:
+                raise ValueError(f"{name} (n,) must have length {n_hint}, got {arr.size}.")
+            if np.any(~np.isfinite(arr)) or np.any(arr <= 0):
+                raise ValueError(f"{name} (n,) must be finite and > 0.")
+            return "x", arr.astype(float, copy=False), None
+        if arr.ndim == 2:
+            if n_hint is not None and arr.shape[1] != n_hint:
+                raise ValueError(f"{name} (T,n) must have n={n_hint} columns, got {arr.shape[1]}.")
+            if np.any(~np.isfinite(arr)) or np.any(arr <= 0):
+                raise ValueError(f"{name} (T,n) must be finite and > 0.")
+            return "xt", arr.astype(float, copy=False), int(arr.shape[0])
+        raise ValueError(f"{name} must be scalar, (n,), or (T,n).")
+
+    ori_arr = np.asarray(ori_rate, dtype=float)
+    if ori_arr.ndim == 0:
+        raise ValueError("ori_rate must be (n,) or (T,n) (scalar does not define genome length).")
+    if ori_arr.ndim == 1:
+        n = int(ori_arr.size)
+    elif ori_arr.ndim == 2:
+        n = int(ori_arr.shape[1])
+    else:
+        raise ValueError("ori_rate must be (n,) or (T,n).")
+
+    I_kind, I_val, TI = _as_rate_field(ori_rate, "ori_rate", n_hint=n)
+    v_kind, v_val, Tv = _as_speed_field(fork_speed, "fork_speed", n_hint=n)
+
+    inv_v_x = None
+    inv_v_xt = None
+    if v_kind == "scalar":
+        inv_v_scalar = 1.0 / v_val
+    elif v_kind == "x":
+        inv_v_x = 1.0 / v_val
+    else:
+        inv_v_xt = 1.0 / v_val
+        Tv = inv_v_xt.shape[0]
+
     p = float(stall_rate)
     stall_left_mask = rng.random(n) < p
     stall_right_mask = rng.random(n) < p
-
     stall_delay_left = np.zeros(n, float)
     stall_delay_right = np.zeros(n, float)
-
     if p > 0.0:
         if np.isfinite(tau):
             if stall_left_mask.any():
-                stall_delay_left[stall_left_mask] = rng.exponential(scale=tau, size=stall_left_mask.sum())
+                stall_delay_left[stall_left_mask] = rng.exponential(scale=tau, size=int(stall_left_mask.sum()))
             if stall_right_mask.any():
-                stall_delay_right[stall_right_mask] = rng.exponential(scale=tau, size=stall_right_mask.sum())
+                stall_delay_right[stall_right_mask] = rng.exponential(scale=tau, size=int(stall_right_mask.sum()))
         else:
             stall_delay_left[stall_left_mask] = np.inf
             stall_delay_right[stall_right_mask] = np.inf
 
-    # ---------------- fork-speed / edge weights ----------------
-    if fork_speeds is None:
-        alpha_const = resolution / float(fork_speed)
-        if perQ:
-            edge_alpha_ring = np.full(n, alpha_const, float)
-        else:
-            edge_alpha = np.full(n - 1, alpha_const, float)
-    else:
-        fs = np.asarray(fork_speeds, dtype=float)
-        if np.any(~np.isfinite(fs)) or np.any(fs <= 0):
-            raise ValueError("fork_speeds must contain only finite positive values.")
-        if perQ:
-            if fs.size != n:
-                raise ValueError(f"perQ=True requires fork_speeds of length n ({n}), got {fs.size}.")
-            edge_alpha_ring = resolution / fs
-        else:
-            if fs.size == n - 1:
-                edge_alpha = resolution / fs
-            elif fs.size == n:
-                edge_alpha = resolution / fs[1:]
-            else:
-                raise ValueError(f"perQ=False requires fork_speeds of length n-1 ({n-1}) or n ({n}), got {fs.size}.")
+    def _row_for_time(t):
+        if not np.isfinite(t) or t < 0.0:
+            return 0
+        r = int(t // resolution_time)
+        if inv_v_xt is not None and r >= Tv:
+            r = Tv - 1
+        return r
 
-    # ---------------- firing-factor gating (event-based) ----------------
+    def _edge_forward(t_here, k_to):
+        if inv_v_xt is not None:
+            r = _row_for_time(t_here)
+            return resolution_space * inv_v_xt[r, k_to] + stall_delay_left[k_to]
+        if inv_v_x is not None:
+            return resolution_space * inv_v_x[k_to] + stall_delay_left[k_to]
+        return resolution_space * inv_v_scalar + stall_delay_left[k_to]
+
+    def _edge_backward(t_here, k_to):
+        if inv_v_xt is not None:
+            r = _row_for_time(t_here)
+            return resolution_space * inv_v_xt[r, k_to] + stall_delay_right[k_to]
+        if inv_v_x is not None:
+            return resolution_space * inv_v_x[k_to] + stall_delay_right[k_to]
+        return resolution_space * inv_v_scalar + stall_delay_right[k_to]
+
+    # firing proposals t0
+    t0 = np.full(n, np.inf, float)
+    if I_kind == "x":
+        rate = I_val
+        pos = rate > 0
+        if np.any(pos):
+            t0[pos] = rng.exponential(scale=1.0 / rate[pos])
+    elif I_kind == "scalar":
+        if I_val > 0:
+            t0[:] = rng.exponential(scale=1.0 / I_val, size=n)
+    else:
+        u = rng.random(n)
+        target = -np.log(u)
+        H = np.cumsum(I_val * resolution_time, axis=0)
+        ge = H >= target[None, :]
+        hit = ge.any(axis=0)
+        j = np.argmax(ge, axis=0).astype(np.int64, copy=False)
+        if np.any(hit):
+            jh = j[hit]
+            kh = np.flatnonzero(hit).astype(np.int64, copy=False)
+            prevH = np.zeros(kh.size, float)
+            m0 = jh > 0
+            if np.any(m0):
+                prevH[m0] = H[jh[m0] - 1, kh[m0]]
+            lam = I_val[jh, kh]
+            frac = np.ones_like(lam)
+            poslam = lam > 0
+            frac[poslam] = (target[kh[poslam]] - prevH[poslam]) / (lam[poslam] * resolution_time)
+            frac = np.clip(frac, 0.0, 1.0)
+            t0[kh] = (jh.astype(float) + frac) * resolution_time
+
+    # firing-factor gating (unchanged)
     use_factors = ffiring_nr is not None
     if use_factors:
         Amax = float(ffiring_nr)
         if not np.isfinite(Amax) or Amax <= 0:
             raise ValueError("ffiring_nr must be a finite positive number.")
-
         cost = 2.0
         if Amax < cost:
             raise ValueError("ffiring_nr must be >= 2 if modelling two forks per origin firing.")
 
-        if ffiring_forkQ:
-            r = 0.0
-        else:
-            r = float(ffiring_recycle)
-            if not np.isfinite(r) or r < 0:
-                raise ValueError("ffiring_recycle must be a finite non-negative number.")
+        r = 0.0 if ffiring_forkQ else float(ffiring_recycle)
+        if not ffiring_forkQ and (not np.isfinite(r) or r < 0):
+            raise ValueError("ffiring_recycle must be a finite non-negative number.")
 
         def recover(A_now, dt):
             if r == 0.0 or dt <= 0.0:
@@ -1414,90 +1721,60 @@ def simulate_replication(
 
         def propagate_from_times(t):
             if not perQ:
-                alpha_lr = np.empty(n, float)
-                alpha_rl = np.empty(n, float)
-                alpha_lr[0] = 0.0
-                alpha_lr[1:] = edge_alpha
-                alpha_rl[-1] = 0.0
-                alpha_rl[:-1] = edge_alpha
-
                 g = np.empty(n, float)
                 src = np.empty(n, np.int32)
-
                 g[0], src[0] = t[0], 0
                 for k in range(1, n):
-                    cand = g[k - 1] + alpha_lr[k] + stall_delay_left[k]
+                    cand = g[k - 1] + _edge_forward(g[k - 1], k)
                     if t[k] <= cand:
                         g[k], src[k] = t[k], k
                     else:
                         g[k], src[k] = cand, src[k - 1]
-
                 for k in range(n - 2, -1, -1):
-                    cand = g[k + 1] + alpha_rl[k] + stall_delay_right[k]
+                    cand = g[k + 1] + _edge_backward(g[k + 1], k)
                     if cand < g[k]:
                         g[k], src[k] = cand, src[k + 1]
-
-                return g, src, alpha_lr, alpha_rl
-            else:
-                g = t.copy()
-                src = np.arange(n, dtype=np.int32)
-
-                visited = np.zeros(n, bool)
-                pq = [(g[i], i) for i in range(n) if np.isfinite(g[i])]
-                heapq.heapify(pq)
-
-                while pq:
-                    time_u, u = heapq.heappop(pq)
-                    if visited[u] or time_u > g[u]:
-                        continue
-                    visited[u] = True
-
-                    v = (u + 1) % n
-                    w = edge_alpha_ring[u] + stall_delay_left[v]
-                    if np.isfinite(w):
-                        cand = time_u + w
-                        if cand < g[v]:
-                            g[v] = cand
-                            src[v] = src[u]
-                            heapq.heappush(pq, (cand, v))
-
-                    v = (u - 1) % n
-                    w = edge_alpha_ring[v] + stall_delay_right[v]
-                    if np.isfinite(w):
-                        cand = time_u + w
-                        if cand < g[v]:
-                            g[v] = cand
-                            src[v] = src[u]
-                            heapq.heappush(pq, (cand, v))
-
-                return g, src, None, None
-
-        def release_times_from_src(rep_time, src, t):
-            idx = np.arange(n, dtype=np.int32)
-            fired = (src == idx) & np.isfinite(t)
-            fired_idx = np.flatnonzero(fired)
-            release = np.full(n, np.inf, float)
-            for ori in fired_idx:
-                seg = np.flatnonzero(src == ori)
-                if seg.size:
-                    release[ori] = np.nanmax(rep_time[seg])
-            return release
+                return g, src
+            g = t.copy()
+            src = np.arange(n, dtype=np.int32)
+            visited = np.zeros(n, bool)
+            pq = [(g[i], i) for i in range(n) if np.isfinite(g[i])]
+            heapq.heapify(pq)
+            while pq:
+                time_u, u = heapq.heappop(pq)
+                if visited[u] or time_u > g[u]:
+                    continue
+                visited[u] = True
+                v = (u + 1) % n
+                w = _edge_forward(time_u, v)
+                if np.isfinite(w):
+                    cand = time_u + w
+                    if cand < g[v]:
+                        g[v] = cand
+                        src[v] = src[u]
+                        heapq.heappush(pq, (cand, v))
+                v = (u - 1) % n
+                w = _edge_backward(time_u, v)
+                if np.isfinite(w):
+                    cand = time_u + w
+                    if cand < g[v]:
+                        g[v] = cand
+                        src[v] = src[u]
+                        heapq.heappush(pq, (cand, v))
+            return g, src
 
         def schedule_with_releases(t_base, release_guess):
             t_adj = np.full(n, np.inf, float)
             A = Amax
             current_time = 0.0
-
-            cand_heap = [(t_base[i], i) for i in np.flatnonzero(np.isfinite(t_base))]
+            cand_idx = np.flatnonzero(np.isfinite(t_base)).astype(np.int64, copy=False)
+            cand_heap = [(t_base[i], int(i)) for i in cand_idx]
             heapq.heapify(cand_heap)
-
             rel_heap = []
             firedQ = np.zeros(n, bool)
-
             while cand_heap or rel_heap:
                 next_cand_t = cand_heap[0][0] if cand_heap else np.inf
                 next_rel_t = rel_heap[0][0] if rel_heap else np.inf
-
                 if next_rel_t <= next_cand_t:
                     te, add = heapq.heappop(rel_heap)
                     if te > current_time:
@@ -1505,14 +1782,12 @@ def simulate_replication(
                         current_time = te
                     A = min(Amax, A + add)
                     continue
-
                 ti, i = heapq.heappop(cand_heap)
                 if firedQ[i]:
                     continue
                 if ti > current_time:
                     A = recover(A, ti - current_time)
                     current_time = ti
-
                 if A >= cost:
                     A -= cost
                     firedQ[i] = True
@@ -1521,19 +1796,18 @@ def simulate_replication(
                     if np.isfinite(rt) and rt >= current_time:
                         heapq.heappush(rel_heap, (rt, cost))
                 else:
-                    dt = wait_time_to_cost(A)
-                    if not np.isfinite(dt):
+                    dtw = wait_time_to_cost(A)
+                    if not np.isfinite(dtw):
                         firedQ[i] = True
                         t_adj[i] = np.inf
                         continue
-                    heapq.heappush(cand_heap, (current_time + dt, i))
-
+                    heapq.heappush(cand_heap, (current_time + dtw, i))
             return t_adj
 
-        t = t0.copy()
-        release_guess = np.full(n, np.inf, float)
         if not ffiring_forkQ:
-            heap = [(t[i], i) for i in np.flatnonzero(np.isfinite(t))]
+            t = t0.copy()
+            heap_idx = np.flatnonzero(np.isfinite(t)).astype(np.int64, copy=False)
+            heap = [(t[i], int(i)) for i in heap_idx]
             heapq.heapify(heap)
             done = np.zeros(n, bool)
             A = Amax
@@ -1551,71 +1825,75 @@ def simulate_replication(
                     done[i] = True
                     t_adj[i] = current_time
                 else:
-                    dt = wait_time_to_cost(A)
-                    if not np.isfinite(dt):
+                    dtw = wait_time_to_cost(A)
+                    if not np.isfinite(dtw):
                         t_adj[i] = np.inf
                         done[i] = True
                         continue
-                    current_time = current_time + dt
-                    A = recover(A, dt)
+                    current_time = current_time + dtw
+                    A = recover(A, dtw)
                     heapq.heappush(heap, (current_time, i))
             t = t_adj
         else:
+            t = t0.copy()
+            release_guess = np.full(n, np.inf, float)
             t = schedule_with_releases(t0, release_guess)
             for _ in range(3):
-                rep_time_tmp, src_tmp, _, _ = propagate_from_times(t)
-                release_guess = release_times_from_src(rep_time_tmp, src_tmp, t)
+                rep_time_tmp, src_tmp = propagate_from_times(t)
+                if not perQ:
+                    changes = np.flatnonzero(np.r_[True, src_tmp[1:] != src_tmp[:-1], True])
+                    starts = changes[:-1]
+                    ends = changes[1:] - 1
+                    labels = src_tmp[starts].astype(np.int64, copy=False)
+                    release_guess.fill(np.inf)
+                    release_guess[labels] = np.maximum(rep_time_tmp[starts], rep_time_tmp[ends])
+                else:
+                    release_guess.fill(np.inf)
+                    fired = np.flatnonzero((src_tmp == np.arange(n, dtype=np.int32)) & np.isfinite(t)).astype(np.int64, copy=False)
+                    for ori in fired:
+                        seg = np.flatnonzero(src_tmp == ori)
+                        if seg.size:
+                            release_guess[ori] = np.nanmax(rep_time_tmp[seg])
                 t_new = schedule_with_releases(t0, release_guess)
-                if np.allclose(np.nan_to_num(t_new, nan=np.inf, posinf=np.inf), np.nan_to_num(t, nan=np.inf, posinf=np.inf), rtol=0, atol=1e-12):
+                if np.allclose(np.nan_to_num(t_new, nan=np.inf, posinf=np.inf),
+                               np.nan_to_num(t, nan=np.inf, posinf=np.inf),
+                               rtol=0, atol=1e-12):
                     t = t_new
                     break
                 t = t_new
     else:
         t = t0
 
-    # ---------------- propagation (track prev for fast fork directionality) ----------------
+    # propagation with prev
     if not perQ:
-        alpha_lr = np.empty(n, float)
-        alpha_rl = np.empty(n, float)
-        alpha_lr[0] = 0.0
-        alpha_lr[1:] = edge_alpha
-        alpha_rl[-1] = 0.0
-        alpha_rl[:-1] = edge_alpha
-
         g = np.empty(n, float)
         src = np.empty(n, np.int32)
         prev = np.full(n, -1, np.int32)
-
         g[0], src[0], prev[0] = t[0], 0, 0
         for k in range(1, n):
-            cand = g[k - 1] + alpha_lr[k] + stall_delay_left[k]
+            cand = g[k - 1] + _edge_forward(g[k - 1], k)
             if t[k] <= cand:
                 g[k], src[k], prev[k] = t[k], k, k
             else:
                 g[k], src[k], prev[k] = cand, src[k - 1], k - 1
-
         for k in range(n - 2, -1, -1):
-            cand = g[k + 1] + alpha_rl[k] + stall_delay_right[k]
+            cand = g[k + 1] + _edge_backward(g[k + 1], k)
             if cand < g[k]:
                 g[k], src[k], prev[k] = cand, src[k + 1], k + 1
-
     else:
         g = t.copy()
         src = np.arange(n, dtype=np.int32)
         prev = np.arange(n, dtype=np.int32)
-
         visited = np.zeros(n, bool)
         pq = [(g[i], i) for i in range(n) if np.isfinite(g[i])]
         heapq.heapify(pq)
-
         while pq:
             time_u, u = heapq.heappop(pq)
             if visited[u] or time_u > g[u]:
                 continue
             visited[u] = True
-
             v = (u + 1) % n
-            w = edge_alpha_ring[u] + stall_delay_left[v]
+            w = _edge_forward(time_u, v)
             if np.isfinite(w):
                 cand = time_u + w
                 if cand < g[v]:
@@ -1623,9 +1901,8 @@ def simulate_replication(
                     src[v] = src[u]
                     prev[v] = u
                     heapq.heappush(pq, (cand, v))
-
             v = (u - 1) % n
-            w = edge_alpha_ring[v] + stall_delay_right[v]
+            w = _edge_backward(time_u, v)
             if np.isfinite(w):
                 cand = time_u + w
                 if cand < g[v]:
@@ -1633,35 +1910,32 @@ def simulate_replication(
                     src[v] = src[u]
                     prev[v] = u
                     heapq.heappush(pq, (cand, v))
-
-    # fork directionality (+1 right-moving, -1 left-moving, 0 origins/undefined)
-    fork_directionality = np.zeros(n, float)
-    if not perQ:
-        idx = np.arange(n, dtype=np.int32)
-        fork_directionality[prev == (idx - 1)] = 1.0
-        fork_directionality[prev == (idx + 1)] = -1.0
-    else:
-        idx = np.arange(n, dtype=np.int32)
-        fork_directionality[prev == ((idx - 1) % n)] = 1.0
-        fork_directionality[prev == ((idx + 1) % n)] = -1.0
 
     idx = np.arange(n, dtype=np.int32)
     fired_mask = (src == idx) & np.isfinite(t)
-    fired_idx = np.flatnonzero(fired_mask)
+    fired_idx = np.flatnonzero(fired_mask).astype(np.int64, copy=False)
+
+    fork_directionality = np.zeros(n, float)
+    if not perQ:
+        fork_directionality[prev == (idx - 1)] = 1.0
+        fork_directionality[prev == (idx + 1)] = -1.0
+    else:
+        fork_directionality[prev == ((idx - 1) % n)] = 1.0
+        fork_directionality[prev == ((idx + 1) % n)] = -1.0
 
     fired_times_min = t[fired_idx]
-    fired_pos_kb = fired_idx.astype(float) * resolution
+    fired_pos_kb = fired_idx.astype(float) * resolution_space
 
     if fired_idx.size >= 2:
         fired_sorted = np.sort(fired_idx)
         diffs = np.diff(fired_sorted)
         if perQ:
             wrap = n - fired_sorted[-1] + fired_sorted[0]
-            interorigin_dist_kb = np.concatenate([diffs, [wrap]]).astype(float) * resolution
+            interorigin_dist_kb = np.concatenate([diffs, [wrap]]).astype(float) * resolution_space
             if interorigin_dist_kb.size != fired_sorted.size:
                 raise RuntimeError("perQ=True: expected len(IODs) == number of fired origins.")
         else:
-            interorigin_dist_kb = diffs.astype(float) * resolution
+            interorigin_dist_kb = diffs.astype(float) * resolution_space
     else:
         interorigin_dist_kb = np.array([], float)
 
@@ -1669,13 +1943,13 @@ def simulate_replication(
     if max_rep_time is not None:
         replication_time_min = np.minimum(replication_time_min, float(max_rep_time))
 
-    # ---------------- time statistics ----------------
+    # --- time statistics (1D only, stays here) ---
     time_stats = None
     if time_statsQ:
         if time_grid is None:
             raise ValueError("time_statsQ=True requires a time_grid array.")
         time_grid = np.asarray(time_grid, dtype=float)
-        t_max_grid = time_grid[-1]
+        t_max_grid = float(time_grid[-1])
 
         def count_from_intervals(starts, ends):
             starts = np.asarray(starts, float)
@@ -1688,30 +1962,53 @@ def simulate_replication(
             ended = np.searchsorted(ends, time_grid, side="left")
             return (started - ended).astype(float)
 
-        finite_mask = np.isfinite(replication_time_min)
-        if finite_mask.any():
-            times_sorted = np.sort(replication_time_min[finite_mask])
-            cum_counts = np.searchsorted(times_sorted, time_grid, side="right")
-            fraction_replicated = cum_counts.astype(float) / float(finite_mask.sum())
-        else:
-            fraction_replicated = np.zeros_like(time_grid, float)
+        # build fork/stall intervals via traversal edges (cheap vs mÃ—n)
+        pk = prev.astype(np.int64, copy=False)
+        good = (pk >= 0) & np.isfinite(replication_time_min) & np.isfinite(replication_time_min[pk])
+        cols = np.flatnonzero(good).astype(np.int64, copy=False)
+        edge_start = replication_time_min[pk[cols]]
+        edge_end = replication_time_min[cols]
 
+        fork_ok = np.isfinite(edge_start) & np.isfinite(edge_end) & (edge_start < edge_end) & (edge_start <= t_max_grid)
+        fork_starts = edge_start[fork_ok].tolist()
+        fork_ends = np.minimum(edge_end[fork_ok], t_max_grid).tolist()
+
+        d = fork_directionality[cols]
+        delay = np.where(d > 0, stall_delay_left[cols], stall_delay_right[cols])
+        stall_ok = np.isfinite(delay) & (delay > 0.0) & np.isfinite(edge_end) & (edge_end <= t_max_grid)
+        stall_starts = (edge_end[stall_ok] - delay[stall_ok]).tolist()
+        stall_ends = np.minimum(edge_end[stall_ok], t_max_grid).tolist()
+
+        total_forks = count_from_intervals(fork_starts, fork_ends)
+        stalled_forks = count_from_intervals(stall_starts, stall_ends)
+        active_forks = total_forks - stalled_forks
+
+        # firing_factors 1D (as before)
         firing_factors = None
         if use_factors:
             Amax = float(ffiring_nr)
             cost = 2.0
+            firing_factors = np.empty_like(time_grid, float)
+
             if ffiring_forkQ:
                 release = np.full(n, np.inf, float)
-                for ori in fired_idx:
-                    seg = np.flatnonzero(src == ori)
-                    if seg.size:
-                        release[ori] = np.nanmax(replication_time_min[seg])
+                if not perQ:
+                    changes = np.flatnonzero(np.r_[True, src[1:] != src[:-1], True])
+                    starts = changes[:-1]
+                    ends = changes[1:] - 1
+                    labels = src[starts].astype(np.int64, copy=False)
+                    release[labels] = np.maximum(replication_time_min[starts], replication_time_min[ends])
+                else:
+                    for ori in fired_idx:
+                        seg = np.flatnonzero(src == ori)
+                        if seg.size:
+                            release[ori] = np.nanmax(replication_time_min[seg])
+
                 fire_events = np.sort(fired_times_min[np.isfinite(fired_times_min)])
                 rel_events = np.sort(release[fired_idx][np.isfinite(release[fired_idx])])
                 A = Amax
                 fi = 0
                 ri = 0
-                firing_factors = np.empty_like(time_grid, float)
                 for j, tj in enumerate(time_grid):
                     while fi < fire_events.size and fire_events[fi] <= tj:
                         A = max(0.0, A - cost)
@@ -1726,305 +2023,180 @@ def simulate_replication(
                 last_t = 0.0
                 events = np.sort(fired_times_min[np.isfinite(fired_times_min)])
 
-                def recover(A_now, dt):
+                def _recover(A_now, dt):
                     if r == 0.0 or dt <= 0.0:
                         return A_now
                     return Amax - (Amax - A_now) * np.exp(-r * dt)
 
                 ei = 0
-                firing_factors = np.empty_like(time_grid, float)
                 for j, tj in enumerate(time_grid):
                     while ei < events.size and events[ei] <= tj:
                         te = events[ei]
-                        A = recover(A, te - last_t)
+                        A = _recover(A, te - last_t)
                         A = max(0.0, A - cost)
                         last_t = te
                         ei += 1
-                    firing_factors[j] = recover(A, tj - last_t)
-
-        fork_starts, fork_ends = [], []
-        stall_starts, stall_ends = [], []
-
-        if not perQ:
-            for ori in fired_idx:
-                t_fire = t[ori]
-                if not np.isfinite(t_fire) or t_fire >= t_max_grid:
-                    continue
-                seg_idx = np.flatnonzero(src == ori)
-                if seg_idx.size == 0:
-                    continue
-
-                right_indices = seg_idx[seg_idx > ori]
-                if right_indices.size:
-                    current_time = t_fire
-                    fork_start = t_fire
-                    fork_t_end = t_fire
-                    for kpos in right_indices:
-                        move_time = current_time + alpha_lr[kpos]
-                        delay = stall_delay_left[kpos]
-                        if not np.isfinite(delay):
-                            s = move_time
-                            if s < t_max_grid:
-                                e = min(replication_time_min[kpos], t_max_grid) if np.isfinite(replication_time_min[kpos]) else t_max_grid
-                                if e > s:
-                                    stall_starts.append(s)
-                                    stall_ends.append(e)
-                                    current_time = e
-                                    fork_t_end = max(fork_t_end, e)
-                            break
-                        if delay > 0.0:
-                            s = move_time
-                            e = min(move_time + delay, t_max_grid)
-                            if e > s:
-                                stall_starts.append(s)
-                                stall_ends.append(e)
-                            current_time = move_time + delay
-                        else:
-                            current_time = move_time
-                        fork_t_end = min(current_time, t_max_grid)
-                        if current_time >= t_max_grid:
-                            break
-                    fork_starts.append(fork_start)
-                    fork_ends.append(fork_t_end)
-
-                left_indices = seg_idx[seg_idx < ori]
-                if left_indices.size:
-                    current_time = t_fire
-                    fork_start = t_fire
-                    fork_t_end = t_fire
-                    for kpos in left_indices[::-1]:
-                        move_time = current_time + alpha_rl[kpos]
-                        delay = stall_delay_right[kpos]
-                        if not np.isfinite(delay):
-                            s = move_time
-                            if s < t_max_grid:
-                                e = min(replication_time_min[kpos], t_max_grid) if np.isfinite(replication_time_min[kpos]) else t_max_grid
-                                if e > s:
-                                    stall_starts.append(s)
-                                    stall_ends.append(e)
-                                    current_time = e
-                                    fork_t_end = max(fork_t_end, e)
-                            break
-                        if delay > 0.0:
-                            s = move_time
-                            e = min(move_time + delay, t_max_grid)
-                            if e > s:
-                                stall_starts.append(s)
-                                stall_ends.append(e)
-                            current_time = move_time + delay
-                        else:
-                            current_time = move_time
-                        fork_t_end = min(current_time, t_max_grid)
-                        if current_time >= t_max_grid:
-                            break
-                    fork_starts.append(fork_start)
-                    fork_ends.append(fork_t_end)
-
-        else:
-            def arc_bounds_on_ring(seg_sorted):
-                m = seg_sorted.size
-                if m == 1:
-                    return int(seg_sorted[0]), int(seg_sorted[0])
-                nxt = np.roll(seg_sorted, -1)
-                gaps = (nxt - seg_sorted) % n
-                i = int(np.argmax(gaps))
-                return int(nxt[i]), int(seg_sorted[i])
-
-            def iter_cw(a, stop_exclusive):
-                x = a
-                while x != stop_exclusive:
-                    yield x
-                    x = (x + 1) % n
-
-            def iter_ccw(a, stop_exclusive):
-                x = a
-                while x != stop_exclusive:
-                    yield x
-                    x = (x - 1) % n
-
-            for ori in fired_idx:
-                t_fire = t[ori]
-                if not np.isfinite(t_fire) or t_fire >= t_max_grid:
-                    continue
-                seg = np.flatnonzero(src == ori)
-                if seg.size == 0:
-                    continue
-                seg_sorted = np.sort(seg)
-                arc_start, arc_end = arc_bounds_on_ring(seg_sorted)
-
-                right_path = list(iter_cw((ori + 1) % n, (arc_end + 1) % n))
-                if right_path:
-                    current_time = t_fire
-                    fork_start = t_fire
-                    fork_t_end = t_fire
-                    prevp = ori
-                    for kpos in right_path:
-                        move_time = current_time + edge_alpha_ring[prevp]
-                        delay = stall_delay_left[kpos]
-                        if not np.isfinite(delay):
-                            s = move_time
-                            if s < t_max_grid:
-                                e = min(replication_time_min[kpos], t_max_grid) if np.isfinite(replication_time_min[kpos]) else t_max_grid
-                                if e > s:
-                                    stall_starts.append(s)
-                                    stall_ends.append(e)
-                                    current_time = e
-                                    fork_t_end = max(fork_t_end, e)
-                            break
-                        if delay > 0.0:
-                            s = move_time
-                            e = min(move_time + delay, t_max_grid)
-                            if e > s:
-                                stall_starts.append(s)
-                                stall_ends.append(e)
-                            current_time = move_time + delay
-                        else:
-                            current_time = move_time
-                        fork_t_end = min(current_time, t_max_grid)
-                        if current_time >= t_max_grid:
-                            break
-                        prevp = kpos
-                    fork_starts.append(fork_start)
-                    fork_ends.append(fork_t_end)
-
-                left_path = list(iter_ccw((ori - 1) % n, (arc_start - 1) % n))
-                if left_path:
-                    current_time = t_fire
-                    fork_start = t_fire
-                    fork_t_end = t_fire
-                    for kpos in left_path:
-                        move_time = current_time + edge_alpha_ring[kpos]
-                        delay = stall_delay_right[kpos]
-                        if not np.isfinite(delay):
-                            s = move_time
-                            if s < t_max_grid:
-                                e = min(replication_time_min[kpos], t_max_grid) if np.isfinite(replication_time_min[kpos]) else t_max_grid
-                                if e > s:
-                                    stall_starts.append(s)
-                                    stall_ends.append(e)
-                                    current_time = e
-                                    fork_t_end = max(fork_t_end, e)
-                            break
-                        if delay > 0.0:
-                            s = move_time
-                            e = min(move_time + delay, t_max_grid)
-                            if e > s:
-                                stall_starts.append(s)
-                                stall_ends.append(e)
-                            current_time = move_time + delay
-                        else:
-                            current_time = move_time
-                        fork_t_end = min(current_time, t_max_grid)
-                        if current_time >= t_max_grid:
-                            break
-                    fork_starts.append(fork_start)
-                    fork_ends.append(fork_t_end)
-
-        total_forks = count_from_intervals(fork_starts, fork_ends)
-        stalled_forks = count_from_intervals(stall_starts, stall_ends)
-        active_forks = total_forks - stalled_forks
+                    firing_factors[j] = _recover(A, tj - last_t)
 
         time_stats = dict(
             time_grid=time_grid,
-            fraction_replicated=fraction_replicated,
             total_forks=total_forks,
             active_forks=active_forks,
             stalled_forks=stalled_forks,
             firing_factors=firing_factors,
         )
 
-    return fired_idx, fired_pos_kb, fired_times_min, replication_time_min, interorigin_dist_kb, time_stats, fork_directionality
+    return (
+        fired_idx.astype(np.int64, copy=False),
+        fired_pos_kb,
+        fired_times_min,
+        replication_time_min,
+        interorigin_dist_kb,
+        time_stats,
+        fork_directionality,
+        # NEW minimal extra return for post dens compilation (no mÃ—n arrays):
+        t, src, prev,
+    )
 
 
 def rsim(
-    fire_rates,
+    ori_rate,
+    fork_speed,
     sim_number=50,
-    resolution=1.0,
-    fork_speed=1.4,
-    fork_speeds=None,
+    resolution_space=1.0,
+    resolution_time=1.0,
+    perQ=False,
     stall_rate=0.0,
     tau=np.inf,
-    seed=None,
-    saveQ=False,
-    print_every=1,
-    time_statsQ=False,
-    time_grid=np.arange(0.0, 1500.0 + 1.0, 1.0),
-    verbose=True,
-    perQ=False,
     ffiring_nr=None,
-    ffiring_recycle=0.,
+    ffiring_recycle=0.0,
     ffiring_forkQ=False,
+    time_statsQ=False,
+    time_stats_densQ=False,   # NEW
+    time_grid=np.arange(0.0, 1500.0 + 1.0, 1.0),
+    max_rep_time=1200.0,
+    seed=None,
+    verbose=True,
+    print_every=1,
+    dens_block_n=4096,         # NEW (space block size)
+    dens_memmap_dir=None,      # NEW
 ):
-    global n
+    ori_arr = np.asarray(ori_rate, dtype=float)
+    if ori_arr.ndim == 1:
+        n = int(ori_arr.size)
+    elif ori_arr.ndim == 2:
+        n = int(ori_arr.shape[1])
+    else:
+        raise ValueError("ori_rate must be (n,) or (T,n).")
 
-    fire_rates = np.asarray(fire_rates, dtype=float)
-    n = fire_rates.size
+    sim_number = int(sim_number)
 
     ss = np.random.SeedSequence(seed) if seed is not None else np.random.SeedSequence()
     generators = [np.random.default_rng(s) for s in ss.spawn(sim_number)]
 
     sum_rep_time = np.zeros(n, dtype=float)
-    count_rep_time = np.zeros(n, dtype=int)
+    count_rep_time = np.zeros(n, dtype=np.int64)
 
-    rep_times_per_sim = []
-    nr_oris = []
+    rep_times_per_sim = np.empty((sim_number, n), dtype=float)
+    nr_oris = np.empty(sim_number, dtype=np.int64)
+
     all_iods = []
-    fire_counts = np.zeros(n, dtype=int)
+    fire_counts = np.zeros(n, dtype=np.int64)
 
-    sum_fdir = np.zeros(n, float)
-    count_fdir = np.zeros(n, int)
+    sum_fdir = np.zeros(n, dtype=float)
+    count_fdir = np.zeros(n, dtype=np.int64)
 
     if time_statsQ:
         if time_grid is None:
             raise ValueError("time_statsQ=True requires a time_grid array.")
         time_grid = np.asarray(time_grid, dtype=float)
-        m = time_grid.size
-        sum_fraction_replicated = np.zeros(m, float)
+        m = int(time_grid.size)
         sum_total_forks = np.zeros(m, float)
         sum_active_forks = np.zeros(m, float)
         sum_stalled_forks = np.zeros(m, float)
         sum_firing_factors = np.zeros(m, float)
         count_firing_factors = 0
+        dt_grid_out = float(time_grid[1] - time_grid[0]) if m >= 2 else 1.0
     else:
         time_grid = None
+        dt_grid_out = None
+        m = None
+
+    # --- allocate density accumulators (disk-backed) ---
+    if time_stats_densQ:
+        if time_grid is None:
+            raise ValueError("time_stats_densQ=True requires time_grid (even if time_statsQ=False).")
+        time_grid = np.asarray(time_grid, dtype=float)
+        m = int(time_grid.size)
+        if dens_memmap_dir is None:
+            dens_memmap_dir = tempfile.gettempdir()
+        os.makedirs(dens_memmap_dir, exist_ok=True)
+
+        def _mm(name, shape, dtype):
+            path = os.path.join(dens_memmap_dir, f"{name}_{int(time.time()*1e6)}.dat")
+            return np.memmap(path, mode="w+", dtype=dtype, shape=shape)
+
+        # store sums as float32 (you can change to uint16 if sim_number <= 65535)
+        sum_replicated_fraction = _mm("sum_replicated_fraction", (m, n), np.float32)
+        sum_initiation_events = _mm("sum_initiation_events", (m, n), np.float32)
+        sum_coalescence_events = _mm("sum_coalescence_events", (m, n), np.float32)
+        sum_right_moving_fork_density = _mm("sum_right_moving_fork_density", (m, n), np.float32)
+        sum_left_moving_fork_density = _mm("sum_left_moving_fork_density", (m, n), np.float32)
+
+        sum_replicated_fraction[:] = 0.0
+        sum_initiation_events[:] = 0.0
+        sum_coalescence_events[:] = 0.0
+        sum_right_moving_fork_density[:] = 0.0
+        sum_left_moving_fork_density[:] = 0.0
+
+        dens_block_n = int(dens_block_n)
+        if dens_block_n <= 0:
+            raise ValueError("dens_block_n must be a positive integer.")
+    else:
+        sum_replicated_fraction = None
+        sum_initiation_events = None
+        sum_coalescence_events = None
+        sum_right_moving_fork_density = None
+        sum_left_moving_fork_density = None
 
     start_time = time.time()
 
     for i, g in enumerate(generators, start=1):
-        fired_idx, _, _, rep_time, iod, time_stats, fdir = simulate_replication(
-            fire_rates,
-            resolution=resolution,
+        fired_idx, _, _, rep_time, iod, time_stats, fdir, t_fire, src, prev = simulate_replication(
+            ori_rate=ori_rate,
             fork_speed=fork_speed,
-            fork_speeds=fork_speeds,
+            resolution_space=resolution_space,
+            resolution_time=resolution_time,
             rng=g,
+            perQ=perQ,
             stall_rate=stall_rate,
             tau=tau,
-            time_statsQ=time_statsQ,
-            time_grid=time_grid,
-            perQ=perQ,
             ffiring_nr=ffiring_nr,
             ffiring_recycle=ffiring_recycle,
             ffiring_forkQ=ffiring_forkQ,
+            time_statsQ=time_statsQ,
+            time_stats_densQ=time_stats_densQ,
+            time_grid=time_grid,
+            max_rep_time=max_rep_time,
         )
+
+        rep_times_per_sim[i - 1, :] = rep_time
+        nr_oris[i - 1] = int(fired_idx.size)
 
         finite_mask = np.isfinite(rep_time)
         sum_rep_time[finite_mask] += rep_time[finite_mask]
         count_rep_time[finite_mask] += 1
 
-        rep_times_per_sim.append(rep_time)
-
-        nr_oris.append(int(fired_idx.size))
         if iod.size:
             all_iods.append(iod)
-
         if fired_idx.size:
             fire_counts[fired_idx] += 1
 
         sum_fdir[finite_mask] += fdir[finite_mask]
         count_fdir[finite_mask] += 1
 
+        # --- 1D time series accumulate (RAM) ---
         if time_statsQ and time_stats is not None:
-            sum_fraction_replicated += time_stats["fraction_replicated"]
             sum_total_forks += time_stats["total_forks"]
             sum_active_forks += time_stats["active_forks"]
             sum_stalled_forks += time_stats["stalled_forks"]
@@ -2033,56 +2205,163 @@ def rsim(
                 sum_firing_factors += ff
                 count_firing_factors += 1
 
-        if verbose and (i % print_every == 0 or i == sim_number):
-            etaf(it=i, maxiter=sim_number, start_time=start_time)
+        # --- 2D densities accumulate (disk memmap, block-by-block, no giant temporaries) ---
+        if time_stats_densQ:
+            t_max_grid = float(time_grid[-1])
+
+            # (a) replicated_fraction: block over x
+            # adds 0/1 per (t,x)
+            for x0 in range(0, n, dens_block_n):
+                x1 = min(n, x0 + dens_block_n)
+                # (m, xb) bool, xb small -> OK
+                blk = (rep_time[x0:x1][None, :] <= time_grid[:, None])
+                sum_replicated_fraction[:, x0:x1] += blk.astype(np.float32)
+
+            # (b) initiation events: sparse binning (no x-blocking needed)
+            tf = t_fire
+            ok = np.isfinite(tf) & (tf <= t_max_grid)
+            if np.any(ok):
+                cols = np.flatnonzero(ok).astype(np.int64, copy=False)
+                bins = np.searchsorted(time_grid, tf[ok], side="left").astype(np.int64, copy=False)
+                np.add.at(sum_initiation_events, (bins, cols), 1.0)
+
+            # (c) coalescence events: sparse binning on boundaries
+            if not perQ:
+                boundary_k = (np.flatnonzero(src[1:] != src[:-1]) + 1).astype(np.int64, copy=False)
+                if boundary_k.size:
+                    km1 = boundary_k - 1
+                    t_meet = np.maximum(rep_time[km1], rep_time[boundary_k])
+                    okm = np.isfinite(t_meet) & (t_meet <= t_max_grid)
+                    if np.any(okm):
+                        bins = np.searchsorted(time_grid, t_meet[okm], side="left").astype(np.int64, copy=False)
+                        cols = boundary_k[okm].astype(np.int64, copy=False)
+                        np.add.at(sum_coalescence_events, (bins, cols), 1.0)
+            else:
+                boundary_k = np.flatnonzero(src[np.r_[1:n, 0]] != src).astype(np.int64, copy=False)
+                if boundary_k.size:
+                    km1 = (boundary_k - 1) % n
+                    t_meet = np.maximum(rep_time[km1], rep_time[boundary_k])
+                    okm = np.isfinite(t_meet) & (t_meet <= t_max_grid)
+                    if np.any(okm):
+                        bins = np.searchsorted(time_grid, t_meet[okm], side="left").astype(np.int64, copy=False)
+                        cols = boundary_k[okm].astype(np.int64, copy=False)
+                        np.add.at(sum_coalescence_events, (bins, cols), 1.0)
+
+            # (d) fork densities: event-interval updates into memmap using sparse add.at
+            # Instead of allocating (m+1,n) diffs, we directly update the (m,n) densities via bin ranges per column.
+            # This is still efficient because each column has O(1) edges; total edges ~ n.
+            # We do it blockwise in x to keep cache friendly.
+
+            pk = prev.astype(np.int64, copy=False)
+            good = (pk >= 0) & np.isfinite(rep_time) & np.isfinite(rep_time[pk])
+            cols0 = np.flatnonzero(good).astype(np.int64, copy=False)
+            if cols0.size:
+                t_end = rep_time[cols0]
+                t_start = rep_time[pk[cols0]]
+                ok2 = (t_start < t_end) & (t_start <= t_max_grid)
+                cols0 = cols0[ok2]
+                if cols0.size:
+                    t_start = t_start[ok2]
+                    t_end = np.minimum(t_end[ok2], t_max_grid)
+                    j0 = np.searchsorted(time_grid, t_start, side="left").astype(np.int64, copy=False)
+                    j1 = np.searchsorted(time_grid, t_end, side="left").astype(np.int64, copy=False)
+                    ok3 = j1 > j0
+                    cols0 = cols0[ok3]
+                    if cols0.size:
+                        j0 = j0[ok3]
+                        j1 = j1[ok3]
+                        d = fdir[cols0]
+                        Rm = d > 0
+                        Lm = d < 0
+
+                        # update ranges: for each (col, j0:j1) add +1
+                        # do in blocks of indices to keep python overhead bounded
+                        def _range_add(target_mm, cols, a, b):
+                            # cols,a,b 1D arrays same length
+                            for kk in range(cols.size):
+                                c = int(cols[kk])
+                                target_mm[a[kk]:b[kk], c] += 1.0
+
+                        if np.any(Rm):
+                            _range_add(sum_right_moving_fork_density, cols0[Rm], j0[Rm], j1[Rm])
+                        if np.any(Lm):
+                            _range_add(sum_left_moving_fork_density, cols0[Lm], j0[Lm], j1[Lm])
+
+        if verbose and (i % int(print_every) == 0 or i == int(sim_number)):
+            etaf(it=i, maxiter=int(sim_number), start_time=start_time)
 
     all_iods_kb = np.concatenate(all_iods) if all_iods else np.array([], dtype=float)
 
     avg_rep_time_min = np.full(n, np.inf, dtype=float)
-    nonzero_mask = count_rep_time > 0
-    avg_rep_time_min[nonzero_mask] = sum_rep_time[nonzero_mask] / count_rep_time[nonzero_mask].astype(float)
+    nonzero = count_rep_time > 0
+    avg_rep_time_min[nonzero] = sum_rep_time[nonzero] / count_rep_time[nonzero].astype(float)
 
     fork_directionality = np.full(n, np.nan, float)
-    fd_mask = count_fdir > 0
-    fork_directionality[fd_mask] = sum_fdir[fd_mask] / count_fdir[fd_mask].astype(float)
+    fd_ok = count_fdir > 0
+    fork_directionality[fd_ok] = sum_fdir[fd_ok] / count_fdir[fd_ok].astype(float)
 
-    rep_times_per_sim = np.vstack(rep_times_per_sim) if rep_times_per_sim else np.empty((0, n))
-    s_phase_durations_min = rep_times_per_sim.max(axis=1) if rep_times_per_sim.size else np.array([], dtype=float)
-
+    s_phase_durations_min = rep_times_per_sim.max(axis=1)
     efficiencies = fire_counts.astype(float) / float(sim_number)
 
+    # --- finalise outputs ---
     if time_statsQ:
-        avg_fraction_replicated = sum_fraction_replicated / float(sim_number)
-        avg_total_forks = sum_total_forks / float(sim_number)
-        avg_active_forks = sum_active_forks / float(sim_number)
-        avg_stalled_forks = sum_stalled_forks / float(sim_number)
+        invS = 1.0 / float(sim_number)
+        avg_total_forks = sum_total_forks * invS
+        avg_active_forks = sum_active_forks * invS
+        avg_stalled_forks = sum_stalled_forks * invS
         avg_firing_factors = (sum_firing_factors / float(count_firing_factors)) if count_firing_factors > 0 else None
     else:
-        avg_fraction_replicated = None
         avg_total_forks = None
         avg_active_forks = None
         avg_stalled_forks = None
         avg_firing_factors = None
 
-    simulation_dict = dict(
+    if time_stats_densQ:
+        # divide memmaps in place; show ETA for this â€œpostâ€ step
+        post_start = time.time()
+        for j, x0 in enumerate(range(0, n, dens_block_n), start=1):
+            x1 = min(n, x0 + dens_block_n)
+            sum_replicated_fraction[:, x0:x1] /= float(sim_number)
+            sum_initiation_events[:, x0:x1] /= float(sim_number)
+            sum_coalescence_events[:, x0:x1] /= float(sim_number)
+            sum_right_moving_fork_density[:, x0:x1] /= float(sim_number)
+            sum_left_moving_fork_density[:, x0:x1] /= float(sim_number)
+            if verbose:
+                etaf(it=j, maxiter=(n + dens_block_n - 1) // dens_block_n, start_time=post_start)
+
+        avg_replicated_fraction = sum_replicated_fraction
+        avg_initiation_events = sum_initiation_events
+        avg_coalescence_events = sum_coalescence_events
+        avg_right_moving_fork_density = sum_right_moving_fork_density
+        avg_left_moving_fork_density = sum_left_moving_fork_density
+        dt_grid_out = float(time_grid[1] - time_grid[0]) if time_grid is not None and time_grid.size >= 2 else 1.0
+    else:
+        avg_replicated_fraction = None
+        avg_initiation_events = None
+        avg_coalescence_events = None
+        avg_right_moving_fork_density = None
+        avg_left_moving_fork_density = None
+
+    return dict(
         replication_timing=avg_rep_time_min,
-        num_oris=nr_oris,
-        inter_ori_distances=all_iods_kb,
         rep_times_per_sim=rep_times_per_sim,
-        efficiency=efficiencies,
         s_phase_duration=s_phase_durations_min,
+        num_oris=nr_oris.tolist(),
+        inter_origin_distances=all_iods_kb,
+        efficiency=efficiencies,
         fork_directionality=fork_directionality,
         time_grid=time_grid,
-        fraction_replicated=avg_fraction_replicated,
+        dt_grid=dt_grid_out,
+        replicated_fraction=avg_replicated_fraction,
+        initiation_events=avg_initiation_events,
+        coalescence_events=avg_coalescence_events,
+        right_moving_fork_density=avg_right_moving_fork_density,
+        left_moving_fork_density=avg_left_moving_fork_density,
         total_forks=avg_total_forks,
         active_forks=avg_active_forks,
         stalled_forks=avg_stalled_forks,
         firing_factors=avg_firing_factors,
     )
-
-    return simulation_dict
-
-
 
 # %% [markdown]
 # ## Master functions
@@ -2094,7 +2373,7 @@ class NameMapping:
             'fr':'firing_rate',
             'eff':'efficiency',
             'rt':'replication_timing',
-            'iod':'inter_ori_distances',
+            'iod':'inter_origin_distances',
             'rfd':'fork_directionality',
             'fs':'fork_speed',
             'fss':'fork_speeds',
@@ -2106,14 +2385,13 @@ class NameMapping:
     
     def __getitem__(self, key):
         key = str(key)
-        if key in self.long_from_short:   # short → long
+        if key in self.long_from_short:   # short â†’ long
             return self.long_from_short[key]
-        if key in self.short_from_long:   # long → long (canonical)
+        if key in self.short_from_long:   # long â†’ long (canonical)
             return key
         raise KeyError(f"Unknown key: {key}")
 
 mapt = NameMapping()
-
 
 # %%
 class DataTypeMapper:
@@ -2149,9 +2427,7 @@ class DataTypeMapper:
         print("Available data-type mappings:")
         for src, d in self._registry.items():
             for dst in d:
-                print(f"  {src}  →  {dst}")
-
-
+                print(f"  {src}  â†’  {dst}")
 
 # %%
 rmap = DataTypeMapper()
@@ -2159,7 +2435,6 @@ rmap.register("firing_rate", "replication_timing", map_firing_timing)
 rmap.register("replication_timing", "firing_rate", map_timing_firing)
 rmap.register("replication_timing", "fork_directionality", map_timing_directionality)
 rmap.register("fork_directionality", "replication_timing", map_directionality_timing)
-
 
 # %%
 def rfit(
@@ -2188,3 +2463,5 @@ def rfit(
 # ## Examples
 
 # %%
+pass
+
