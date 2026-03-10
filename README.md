@@ -4,13 +4,13 @@
 
 # DNAscape
 
-[![Documentation Status](https://readthedocs.org/projects/dnascape/badge/?version=latest)](https://dnascape.readthedocs.io/en/latest/)
+[![Documentation Build](https://github.com/fberkemeier/DNAscape-dev/actions/workflows/build-docs.yml/badge.svg)](https://github.com/fberkemeier/DNAscape-dev/actions/workflows/build-docs.yml)
 
 DNAscape is a computational framework for simulating, mapping, and analysing DNA replication kinetics at genome scale. It provides a unified modelling environment that links replication origin activity, fork propagation, and replication timing through explicit mechanistic assumptions.
 
 This framework integrates replication datasets such as Repli-seq, SNS-seq, OK-seq, and related assays into a mathematically grounded kinetic framework, enabling genome-wide reconstruction of replication programmes and inference of core replication features. Importantly, it supports hypothesis-driven modelling, allowing users to simulate alternative mechanistic scenarios, test assumptions about origin firing or fork behaviour, and quantify how changes in kinetics reshape genome-wide replication dynamics.
 
-Full details of the DNAscape framework, together with worked examples and tutorials, are available in the [Documentation](https://dnascape.readthedocs.io/en/latest/).
+Full details of the DNAscape framework, together with worked examples and tutorials, are available in the [Documentation](https://github.com/fberkemeier/DNAscape-dev/blob/main/docs/build/html/index.html).
 
 ## Key features
 
@@ -26,7 +26,7 @@ Full details of the DNAscape framework, together with worked examples and tutori
 
 ## Documentation
 
-Full documentation, including installation instructions, tutorials, and API reference, is available in the [Documentation](https://dnascape.readthedocs.io/en/latest/).
+Full documentation, including installation instructions, tutorials, and API reference, is available in the [Documentation](https://github.com/fberkemeier/DNAscape-dev/blob/main/docs/build/html/index.html).
 
 The documentation includes:
 - Installation and environment setup
