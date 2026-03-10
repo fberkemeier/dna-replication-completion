@@ -50,7 +50,7 @@ See the documentation for recommended workflows and examples.
 
 If you use DNAscape in your research, please cite our publication.
 
-## Questions, bugs, and feature requests  as
+## Questions, bugs, and feature requests
 
 If you encounter bugs or have questions regarding usage, you may open a GitHub issue:
 https://github.com/fberkemeier/DNAscape/issues
