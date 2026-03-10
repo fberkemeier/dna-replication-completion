@@ -22,11 +22,14 @@ def simulate_replication(
     ffiring_recycle=0.0,
     ffiring_forkQ=False,
     time_statsQ=False,
-    time_stats_densQ=False,  # NEW (densities handled in rsim; here kept for API symmetry)
+    time_stats_xtQ=False,  # space-time stats are handled in rsim; kept for API symmetry
+    time_stats_densQ=None,  # deprecated alias; kept for backwards compatibility
     time_grid=None,
     max_rep_time=1200.0,
 ):
     rng = np.random.default_rng() if rng is None else rng
+    if time_stats_densQ is not None:
+        time_stats_xtQ = bool(time_stats_densQ)
 
     resolution_space = float(resolution_space)
     if not np.isfinite(resolution_space) or resolution_space <= 0:
@@ -539,8 +542,8 @@ def simulate_replication(
     )
 
 def rsim(
-    ori_rate,
-    fork_speed,
+    ori_rate=0.1,
+    fork_speed=1.4,
     sim_number=50,
     resolution_space=1.0,
     resolution_time=1.0,
@@ -551,15 +554,19 @@ def rsim(
     ffiring_recycle=0.0,
     ffiring_forkQ=False,
     time_statsQ=False,
-    time_stats_densQ=False,   # NEW
+    time_stats_xtQ=False,
+    time_stats_densQ=None,  # deprecated alias; kept for backwards compatibility
     time_grid=np.arange(0.0, 1500.0 + 1.0, 1.0),
     max_rep_time=1200.0,
     seed=None,
     verbose=True,
     print_every=1,
-    dens_block_n=4096,         # NEW (space block size)
-    dens_memmap_dir=None,      # NEW
+    dens_block_n=4096,
+    dens_memmap_dir=None,
 ):
+    if time_stats_densQ is not None:
+        time_stats_xtQ = bool(time_stats_densQ)
+
     ori_arr = np.asarray(ori_rate, dtype=float)
     if ori_arr.ndim == 1:
         n = int(ori_arr.size)
@@ -585,28 +592,35 @@ def rsim(
     sum_fdir = np.zeros(n, dtype=float)
     count_fdir = np.zeros(n, dtype=np.int64)
 
-    if time_statsQ:
+    need_time_grid = time_statsQ or time_stats_xtQ
+    if need_time_grid:
         if time_grid is None:
-            raise ValueError("time_statsQ=True requires a time_grid array.")
+            raise ValueError("time_statsQ/time_stats_xtQ require a time_grid array.")
         time_grid = np.asarray(time_grid, dtype=float)
         m = int(time_grid.size)
+        dt_grid_out = float(time_grid[1] - time_grid[0]) if m >= 2 else 1.0
+        sum_replicated_fraction = np.zeros(m, float)
+    else:
+        time_grid = None
+        dt_grid_out = None
+        m = None
+        sum_replicated_fraction = None
+
+    if time_statsQ:
         sum_total_forks = np.zeros(m, float)
         sum_active_forks = np.zeros(m, float)
         sum_stalled_forks = np.zeros(m, float)
         sum_firing_factors = np.zeros(m, float)
         count_firing_factors = 0
-        dt_grid_out = float(time_grid[1] - time_grid[0]) if m >= 2 else 1.0
     else:
-        time_grid = None
-        dt_grid_out = None
-        m = None
+        sum_total_forks = None
+        sum_active_forks = None
+        sum_stalled_forks = None
+        sum_firing_factors = None
+        count_firing_factors = 0
 
-    # --- allocate density accumulators (disk-backed) ---
-    if time_stats_densQ:
-        if time_grid is None:
-            raise ValueError("time_stats_densQ=True requires time_grid (even if time_statsQ=False).")
-        time_grid = np.asarray(time_grid, dtype=float)
-        m = int(time_grid.size)
+    # --- allocate space-time accumulators (disk-backed) ---
+    if time_stats_xtQ:
         if dens_memmap_dir is None:
             dens_memmap_dir = tempfile.gettempdir()
         os.makedirs(dens_memmap_dir, exist_ok=True)
@@ -616,27 +630,27 @@ def rsim(
             return np.memmap(path, mode="w+", dtype=dtype, shape=shape)
 
         # store sums as float32 (you can change to uint16 if sim_number <= 65535)
-        sum_replicated_fraction = _mm("sum_replicated_fraction", (m, n), np.float32)
-        sum_initiation_events = _mm("sum_initiation_events", (m, n), np.float32)
-        sum_coalescence_events = _mm("sum_coalescence_events", (m, n), np.float32)
-        sum_right_moving_fork_density = _mm("sum_right_moving_fork_density", (m, n), np.float32)
-        sum_left_moving_fork_density = _mm("sum_left_moving_fork_density", (m, n), np.float32)
+        sum_replicated_fraction_xt = _mm("sum_replicated_fraction_xt", (m, n), np.float32)
+        sum_initiation_events_xt = _mm("sum_initiation_events_xt", (m, n), np.float32)
+        sum_coalescence_events_xt = _mm("sum_coalescence_events_xt", (m, n), np.float32)
+        sum_right_moving_fork_density_xt = _mm("sum_right_moving_fork_density_xt", (m, n), np.float32)
+        sum_left_moving_fork_density_xt = _mm("sum_left_moving_fork_density_xt", (m, n), np.float32)
 
-        sum_replicated_fraction[:] = 0.0
-        sum_initiation_events[:] = 0.0
-        sum_coalescence_events[:] = 0.0
-        sum_right_moving_fork_density[:] = 0.0
-        sum_left_moving_fork_density[:] = 0.0
+        sum_replicated_fraction_xt[:] = 0.0
+        sum_initiation_events_xt[:] = 0.0
+        sum_coalescence_events_xt[:] = 0.0
+        sum_right_moving_fork_density_xt[:] = 0.0
+        sum_left_moving_fork_density_xt[:] = 0.0
 
         dens_block_n = int(dens_block_n)
         if dens_block_n <= 0:
             raise ValueError("dens_block_n must be a positive integer.")
     else:
-        sum_replicated_fraction = None
-        sum_initiation_events = None
-        sum_coalescence_events = None
-        sum_right_moving_fork_density = None
-        sum_left_moving_fork_density = None
+        sum_replicated_fraction_xt = None
+        sum_initiation_events_xt = None
+        sum_coalescence_events_xt = None
+        sum_right_moving_fork_density_xt = None
+        sum_left_moving_fork_density_xt = None
 
     start_time = time.time()
 
@@ -654,6 +668,7 @@ def rsim(
             ffiring_recycle=ffiring_recycle,
             ffiring_forkQ=ffiring_forkQ,
             time_statsQ=time_statsQ,
+            time_stats_xtQ=time_stats_xtQ,
             time_stats_densQ=time_stats_densQ,
             time_grid=time_grid,
             max_rep_time=max_rep_time,
@@ -674,6 +689,14 @@ def rsim(
         sum_fdir[finite_mask] += fdir[finite_mask]
         count_fdir[finite_mask] += 1
 
+        # --- 1D replicated-fraction time series (RAM) ---
+        if time_grid is not None:
+            rep_sorted = np.sort(rep_time[finite_mask])
+            if rep_sorted.size:
+                sum_replicated_fraction += (
+                    np.searchsorted(rep_sorted, time_grid, side="right") / float(n)
+                )
+
         # --- 1D time series accumulate (RAM) ---
         if time_statsQ and time_stats is not None:
             sum_total_forks += time_stats["total_forks"]
@@ -684,25 +707,23 @@ def rsim(
                 sum_firing_factors += ff
                 count_firing_factors += 1
 
-        # --- 2D densities accumulate (disk memmap, block-by-block, no giant temporaries) ---
-        if time_stats_densQ:
+        # --- 2D space-time stats accumulate (disk memmap, block-by-block, no giant temporaries) ---
+        if time_stats_xtQ:
             t_max_grid = float(time_grid[-1])
 
-            # (a) replicated_fraction: block over x
-            # adds 0/1 per (t,x)
+            # (a) replicated fraction in (t,x)
             for x0 in range(0, n, dens_block_n):
                 x1 = min(n, x0 + dens_block_n)
-                # (m, xb) bool, xb small -> OK
                 blk = (rep_time[x0:x1][None, :] <= time_grid[:, None])
-                sum_replicated_fraction[:, x0:x1] += blk.astype(np.float32)
+                sum_replicated_fraction_xt[:, x0:x1] += blk.astype(np.float32)
 
-            # (b) initiation events: sparse binning (no x-blocking needed)
+            # (b) initiation events: sparse binning
             tf = t_fire
             ok = np.isfinite(tf) & (tf <= t_max_grid)
             if np.any(ok):
                 cols = np.flatnonzero(ok).astype(np.int64, copy=False)
                 bins = np.searchsorted(time_grid, tf[ok], side="left").astype(np.int64, copy=False)
-                np.add.at(sum_initiation_events, (bins, cols), 1.0)
+                np.add.at(sum_initiation_events_xt, (bins, cols), 1.0)
 
             # (c) coalescence events: sparse binning on boundaries
             if not perQ:
@@ -714,7 +735,7 @@ def rsim(
                     if np.any(okm):
                         bins = np.searchsorted(time_grid, t_meet[okm], side="left").astype(np.int64, copy=False)
                         cols = boundary_k[okm].astype(np.int64, copy=False)
-                        np.add.at(sum_coalescence_events, (bins, cols), 1.0)
+                        np.add.at(sum_coalescence_events_xt, (bins, cols), 1.0)
             else:
                 boundary_k = np.flatnonzero(src[np.r_[1:n, 0]] != src).astype(np.int64, copy=False)
                 if boundary_k.size:
@@ -724,13 +745,9 @@ def rsim(
                     if np.any(okm):
                         bins = np.searchsorted(time_grid, t_meet[okm], side="left").astype(np.int64, copy=False)
                         cols = boundary_k[okm].astype(np.int64, copy=False)
-                        np.add.at(sum_coalescence_events, (bins, cols), 1.0)
+                        np.add.at(sum_coalescence_events_xt, (bins, cols), 1.0)
 
-            # (d) fork densities: event-interval updates into memmap using sparse add.at
-            # Instead of allocating (m+1,n) diffs, we directly update the (m,n) densities via bin ranges per column.
-            # This is still efficient because each column has O(1) edges; total edges ~ n.
-            # We do it blockwise in x to keep cache friendly.
-
+            # (d) fork densities in (t,x)
             pk = prev.astype(np.int64, copy=False)
             good = (pk >= 0) & np.isfinite(rep_time) & np.isfinite(rep_time[pk])
             cols0 = np.flatnonzero(good).astype(np.int64, copy=False)
@@ -753,18 +770,15 @@ def rsim(
                         Rm = d > 0
                         Lm = d < 0
 
-                        # update ranges: for each (col, j0:j1) add +1
-                        # do in blocks of indices to keep python overhead bounded
                         def _range_add(target_mm, cols, a, b):
-                            # cols,a,b 1D arrays same length
                             for kk in range(cols.size):
                                 c = int(cols[kk])
                                 target_mm[a[kk]:b[kk], c] += 1.0
 
                         if np.any(Rm):
-                            _range_add(sum_right_moving_fork_density, cols0[Rm], j0[Rm], j1[Rm])
+                            _range_add(sum_right_moving_fork_density_xt, cols0[Rm], j0[Rm], j1[Rm])
                         if np.any(Lm):
-                            _range_add(sum_left_moving_fork_density, cols0[Lm], j0[Lm], j1[Lm])
+                            _range_add(sum_left_moving_fork_density_xt, cols0[Lm], j0[Lm], j1[Lm])
 
         if verbose and (i % int(print_every) == 0 or i == int(sim_number)):
             etaf(it=i, maxiter=int(sim_number), start_time=start_time)
@@ -782,6 +796,12 @@ def rsim(
     s_phase_durations_min = rep_times_per_sim.max(axis=1)
     efficiencies = fire_counts.astype(float) / float(sim_number)
 
+    avg_replicated_fraction = (
+        sum_replicated_fraction / float(sim_number)
+        if sum_replicated_fraction is not None
+        else None
+    )
+
     # --- finalise outputs ---
     if time_statsQ:
         invS = 1.0 / float(sim_number)
@@ -795,31 +815,30 @@ def rsim(
         avg_stalled_forks = None
         avg_firing_factors = None
 
-    if time_stats_densQ:
-        # divide memmaps in place; show ETA for this â€œpostâ€ step
+    if time_stats_xtQ:
         post_start = time.time()
         for j, x0 in enumerate(range(0, n, dens_block_n), start=1):
             x1 = min(n, x0 + dens_block_n)
-            sum_replicated_fraction[:, x0:x1] /= float(sim_number)
-            sum_initiation_events[:, x0:x1] /= float(sim_number)
-            sum_coalescence_events[:, x0:x1] /= float(sim_number)
-            sum_right_moving_fork_density[:, x0:x1] /= float(sim_number)
-            sum_left_moving_fork_density[:, x0:x1] /= float(sim_number)
+            sum_replicated_fraction_xt[:, x0:x1] /= float(sim_number)
+            sum_initiation_events_xt[:, x0:x1] /= float(sim_number)
+            sum_coalescence_events_xt[:, x0:x1] /= float(sim_number)
+            sum_right_moving_fork_density_xt[:, x0:x1] /= float(sim_number)
+            sum_left_moving_fork_density_xt[:, x0:x1] /= float(sim_number)
             if verbose:
                 etaf(it=j, maxiter=(n + dens_block_n - 1) // dens_block_n, start_time=post_start)
 
-        avg_replicated_fraction = sum_replicated_fraction
-        avg_initiation_events = sum_initiation_events
-        avg_coalescence_events = sum_coalescence_events
-        avg_right_moving_fork_density = sum_right_moving_fork_density
-        avg_left_moving_fork_density = sum_left_moving_fork_density
+        avg_replicated_fraction_xt = sum_replicated_fraction_xt
+        avg_initiation_events_xt = sum_initiation_events_xt
+        avg_coalescence_events_xt = sum_coalescence_events_xt
+        avg_right_moving_fork_density_xt = sum_right_moving_fork_density_xt
+        avg_left_moving_fork_density_xt = sum_left_moving_fork_density_xt
         dt_grid_out = float(time_grid[1] - time_grid[0]) if time_grid is not None and time_grid.size >= 2 else 1.0
     else:
-        avg_replicated_fraction = None
-        avg_initiation_events = None
-        avg_coalescence_events = None
-        avg_right_moving_fork_density = None
-        avg_left_moving_fork_density = None
+        avg_replicated_fraction_xt = None
+        avg_initiation_events_xt = None
+        avg_coalescence_events_xt = None
+        avg_right_moving_fork_density_xt = None
+        avg_left_moving_fork_density_xt = None
 
     return dict(
         replication_timing=avg_rep_time_min,
@@ -832,10 +851,11 @@ def rsim(
         time_grid=time_grid,
         dt_grid=dt_grid_out,
         replicated_fraction=avg_replicated_fraction,
-        initiation_events=avg_initiation_events,
-        coalescence_events=avg_coalescence_events,
-        right_moving_fork_density=avg_right_moving_fork_density,
-        left_moving_fork_density=avg_left_moving_fork_density,
+        replicated_fraction_xt=avg_replicated_fraction_xt,
+        initiation_events_xt=avg_initiation_events_xt,
+        coalescence_events_xt=avg_coalescence_events_xt,
+        right_moving_fork_density_xt=avg_right_moving_fork_density_xt,
+        left_moving_fork_density_xt=avg_left_moving_fork_density_xt,
         total_forks=avg_total_forks,
         active_forks=avg_active_forks,
         stalled_forks=avg_stalled_forks,
