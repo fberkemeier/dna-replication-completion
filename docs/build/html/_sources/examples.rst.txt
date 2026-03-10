@@ -1,7 +1,0 @@
-Examples
-============
-
-This section
-
-Models
----------------------

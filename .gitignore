@@ -6,3 +6,5 @@ __pycache__/
 
 # Sphinx build output (do not commit)
 docs/build/
+
+pyproject.toml
