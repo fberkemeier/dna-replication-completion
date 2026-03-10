@@ -170,7 +170,7 @@ def plotf(*arrays, labels=None, x_array=None, dual_axis=False, resolution=1, reg
           invyQ=False, figsize=(10, 4), xlims=(None, None), ylims=(None, None), title='',
           xtitle='Index', ytitle='Value', x_show=True, y_show=True, logyQ=False, logxQ=False,
           scale_matchQ=False, saveQ=False, sname='test', ext='pdf', layout_rect=(0.12, 0.15, 0.98, 0.95),
-          fig=None, ax=None, showQ=True):
+          fig=None, ax=None, showQ=True, return_handles=False):
 
     arrays = [np.asarray(a) for a in arrays]
     n = len(arrays)
@@ -181,10 +181,28 @@ def plotf(*arrays, labels=None, x_array=None, dual_axis=False, resolution=1, reg
         raise ValueError("scale_matchQ=True only makes sense for dual_axis with exactly two arrays.")
 
     if x_array is not None:
-        xs = [np.asarray(x) for x in x_array]
-        if len(xs) != n:
-            raise ValueError("Length of x_array must match number of arrays")
+        # Allow either:
+        # 1) one shared x-array for all y-arrays, or
+        # 2) one x-array per y-array.
+        if isinstance(x_array, np.ndarray) and x_array.ndim == 2 and x_array.shape[0] == n:
+            xs = [np.asarray(row) for row in x_array]
+        elif (
+            isinstance(x_array, (list, tuple))
+            and len(x_array) == n
+            and all(np.ndim(xi) > 0 for xi in x_array)
+        ):
+            xs = [np.asarray(xi) for xi in x_array]
+        else:
+            x_shared = np.asarray(x_array)
+            if x_shared.ndim != 1:
+                raise ValueError(
+                    "x_array must be a 1D array, or a list/tuple of 1D arrays matching number of arrays."
+                )
+            xs = [x_shared] * n
+
         for i, (xi, yi) in enumerate(zip(xs, arrays)):
+            if np.asarray(xi).ndim != 1:
+                raise ValueError(f"x_array[{i}] must be 1D")
             if len(xi) != len(yi):
                 raise ValueError(f"x_array[{i}] and arrays[{i}] must have same length")
     else:
@@ -327,7 +345,9 @@ def plotf(*arrays, labels=None, x_array=None, dual_axis=False, resolution=1, reg
             if showQ:
                 plt.show()
 
-        return fig, (ax1, ax2)
+        if return_handles:
+            return fig, (ax1, ax2)
+        return None
 
     if ax is None:
         if fig is None:
@@ -388,6 +408,10 @@ def plotf(*arrays, labels=None, x_array=None, dual_axis=False, resolution=1, reg
             fig.savefig(f"figures/plot_{sname}.{ext}", bbox_inches="tight")
         if showQ:
             plt.show()
+
+    if return_handles:
+        return fig, ax
+    return None
 
 def mplotf(marrays, mlabels=None, mx_array=None, mdual_axis=None, mresolution=None, mregion_high=None, mrname=None,
            minvyQ=None, mfigsize=None, mxlims=None, mylims=None, mxtitle=None, mytitle=None,
@@ -537,7 +561,7 @@ def ploth(*arrays, labels=None, bin_size=5, alpha=0.5, density=False, statsQ=Tru
         base_label = labels[i] if labels and i < len(labels) else None
 
         if statsQ:
-            stats = f"Î¼={np.nanmean(arr):.2f}\n Ïƒ={np.nanstd(arr):.2f}\n M={np.nanmedian(arr):.2f}"
+            stats = f"μ={np.nanmean(arr):.2f}\n σ={np.nanstd(arr):.2f}\n M={np.nanmedian(arr):.2f}"
             label = (base_label if base_label else "") + stats
         else:
             label = base_label
