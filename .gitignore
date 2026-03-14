@@ -18,3 +18,18 @@ examples/data/*
 !examples/data/example/
 !examples/data/example/**
 ROADMAP.md
+
+# Private paper workspace
+paper/
+
+# LaTeX paper outputs
+paper/**/*.aux
+paper/**/*.log
+paper/**/*.out
+paper/**/*.synctex.gz
+paper/**/*.fdb_latexmk
+paper/**/*.fls
+paper/**/*.cpt
+paper/**/*.pdf
+paper/**/*.blg
+paper/**/*.bbl
