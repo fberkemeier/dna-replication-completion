@@ -52,6 +52,13 @@ def load(d='replication_timing', cell_line='H1', chr_number=1, example='hESC'):
         data = np.loadtxt(_resolve_data_path(f"{mapt[d]}/{example}_chr{chr_number}.txt"), dtype=float)
     return data
 
+def loadtxt(stitle='save_example', outpath="output"):
+    arr = np.loadtxt(
+        _resolve_data_path(f"{outpath}/{stitle}.txt"),
+        dtype=float
+    )
+    return arr
+
 def loadcsv(d='replication_timing', cell_line='H1', chr_number=1, example='hESC', region='region'):
     if d == 'example':
         fname = _resolve_data_path(f"{mapt[d]}/{example}.csv")

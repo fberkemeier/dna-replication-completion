@@ -1,8 +1,8 @@
 """Shared numerical and utility helpers for DNAscape."""
 
 import time
-
 import numpy as np
+from numpy.fft import rfft, irfft
 
 def logistic(x, k, x0):
     return 1.0 / (1.0 + np.exp(-k * (x - x0)))
