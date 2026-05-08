@@ -3,25 +3,9 @@
 .vscode/
 __pycache__/
 *.pyc
-*.egg-info/
-
-
-docs/build/
 
 # Jupyter checkpoints
 **/.ipynb_checkpoints/
 
-# Local example outputs
-examples/figures/
-
-# Keep only minimal example dataset
-examples/data/*
-!examples/data/example/
-!examples/data/example/**
-ROADMAP.md
-
-# Private paper workspace
-paper/
-
-# Local backups
-backup/
+# Generated figures
+figures/
