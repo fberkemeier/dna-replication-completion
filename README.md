@@ -152,3 +152,24 @@ For each dataset, the notebook can generate:
 This repository is intentionally not packaged as an installable library. It is a
 small, self-contained analysis workspace for replication timing, simulation, and
 theoretical completion-bound calculations.
+
+## System requirements
+
+This codebase was developed and tested on Python 3.12.3 under Windows 11. No installation procedure is required beyond installing standard Python 3 and the key dependencies. All scripts should remain compatible with standard Python 3 distributions on other operating systems.
+
+## License
+
+This project is openly distributed under the MIT License. This license allows unrestricted use, redistribution, and modification, provided that proper attribution to the original creators is maintained.
+
+## Contact information
+
+For further information, contributions, or queries, please contact:
+
+- **Email**: [fp409@cam.ac.uk](mailto:fp409@cam.ac.uk)
+- **GitHub**: [fberkemeier](https://github.com/fberkemeier)
+
+Should any bugs arise or if you have any questions about usage, please raise a [GitHub issue](https://github.com/fberkemeier/replication-timing-bounds/issues).
+
+## References
+
+Alkhaled, A., Berkemeier, F., & Nik, K. Title to be determined. _arXiv_ (2026).
