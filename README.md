@@ -1,27 +1,78 @@
 # Repli-seq Completion Bounds
 
-This repository is now flattened around one workflow for Repli-seq-based completion-bound analysis, with the ecDNA and whole-chromosome use cases collected in a single notebook.
+This repository contains a compact, notebook-first workflow for comparing
+Repli-seq-derived replication timing profiles with Proposition 1 completion-time
+and expected-time bounds.
 
-## Layout
+The analysis is organized around two geometries:
 
-- `repliseq_completion_bounds.ipynb`: the main notebook
-- `repliseq_completion_bounds.py`: the small helper module used by the notebook
-- `data/`: the Repli-seq bigWig inputs
+- **Line-bound chromosome profiles**: non-periodic chromosome-scale timing
+  profiles, simulated with `perQ=False` and compared with the full-line bound.
+- **Torus-bound periodic intervals**: selected genomic windows treated as
+  periodic domains, simulated with `perQ=True` and compared with the torus bound.
 
-Generated figures are written to `figures/` when the notebook runs.
+## Repository Layout
+
+- `repliseq_completion_bounds.ipynb`: main analysis notebook.
+- `repliseq_completion_bounds.py`: trimmed helper module used by the notebook.
+- `requirements.txt`: Python runtime dependencies.
+- `data/`: Repli-seq bigWig inputs used by the notebook.
+
+Generated plots are written to `figures/` when figure saving is enabled in the
+notebook.
 
 ## Installation
+
+From the repository root, install the Python dependencies:
 
 ```bash
 pip install -r requirements.txt
 ```
 
-## Usage
+Then open `repliseq_completion_bounds.ipynb` in Jupyter from the repository root
+so the notebook can import the local helper module and find the `data/` files.
 
-Run `repliseq_completion_bounds.ipynb` from the repository root. The notebook imports:
+## Workflow
+
+The notebook first defines shared utilities for:
+
+- reading Repli-seq bigWig tracks;
+- smoothing and refining timing curves;
+- fitting initiation-rate profiles;
+- running stochastic replication simulations;
+- computing completion-time and expected-time bounds;
+- plotting simulation and bound comparisons.
+
+It then provides two runnable analysis sections:
+
+- **Analysis A** builds line-profile configurations, runs one chromosome-scale
+  non-periodic example by default, and includes an optional batch loop.
+- **Analysis B** builds periodic-interval configurations, runs one torus-bound
+  interval example by default, and includes an optional batch loop.
+
+## Units
+
+The physical fork speed is specified once in kb/min. The notebook converts it to
+grid units using the current spatial resolution:
 
 ```python
-from repliseq_completion_bounds import plotf, rescale, rfit, rsim
+fork_speed_grid = fork_speed_kb_min / dx_kb
 ```
 
-The repo no longer ships as a package because it is intended only for this specific analysis.
+The same grid speed is used for simulation and for the theoretical bounds.
+Fitted initiation rates are treated as rates per grid site per minute; the kb
+conversion is used only for plotting lengths.
+
+## Outputs
+
+For each dataset, the notebook can generate:
+
+- fitted timing and initiation-rate profiles;
+- replicated-fraction maps from simulation;
+- theoretical completion-time bounds versus empirical simulation curves;
+- expected-time summaries derived from the same survival bound;
+- local initiation-mass and tightness diagnostics.
+
+This repository is intentionally not packaged as an installable library. It is a
+small, self-contained analysis workspace for the Repli-seq completion-bound
+calculations.
