@@ -73,13 +73,12 @@ shared utilities, then applies them to example domains.
    uniform completion-time comparison rather than an averaged pointwise
    comparison.
 
-5. **Expected replication timing bounds**
+5. **Expected local replication timing bounds**
 
    In addition to epsilon-dependent completion-time curves, the notebook
-   integrates the same survival bound to obtain an upper bound on expected
-   replication timing. These expected-time summaries are compared with empirical
-   simulation estimates such as `max_x E[T(x)]`, with domain-completion
-   expectations reported as an additional simulation reference.
+   integrates the same survival bound to obtain an upper bound on expected local
+   replication timing. These expected-time summaries are compared with the
+   empirical simulation estimate `max_x E[T(x)]`.
 
 ## Domains
 
@@ -143,10 +142,10 @@ conversion is used only for plotting lengths.
 For each dataset, the notebook can generate:
 
 - fitted timing and initiation-rate profiles;
-- replicated-fraction maps from simulation;
+- optional replicated-fraction maps from simulation;
 - theoretical completion-time bounds across `epsilon` values versus empirical
   simulation curves;
-- expected replication timing bounds derived from the same survival estimate;
+- expected local replication timing bounds derived from the same survival estimate;
 - local initiation-mass and tightness diagnostics.
 
 This repository is intentionally not packaged as an installable library. It is a
