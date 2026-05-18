@@ -296,7 +296,7 @@ def simulate_replication(
     time_stats_xtQ=False,
     time_stats_densQ=None,
     time_grid=None,
-    max_rep_time=1200.0,
+    max_rep_time=2000.0,
 ):
     """Run one stochastic replication simulation on a 1D rate landscape."""
     del tau
@@ -450,7 +450,7 @@ def rsim(
     time_stats_xtQ=False,
     time_stats_densQ=None,
     time_grid=np.arange(0.0, 1501.0, 1.0),
-    max_rep_time=1200.0,
+    max_rep_time=2000.0,
     seed=None,
     verbose=True,
     print_every=1,
@@ -727,13 +727,16 @@ def plotf(
     ax.set_xlabel(xtitle)
     ax.set_ylabel(ytitle)
     ax.set_title(title)
-    ax.set_xlim(xlims)
-    ax.set_ylim(ylims)
-
     if logyQ:
         ax.set_yscale("log")
     if logxQ:
         ax.set_xscale("log")
+
+    if xlims is not None and any(value is not None for value in xlims):
+        ax.set_xlim(xlims)
+    if ylims is not None and any(value is not None for value in ylims):
+        ax.set_ylim(ylims)
+
     if invyQ:
         ax.invert_yaxis()
 
