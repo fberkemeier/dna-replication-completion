@@ -167,7 +167,7 @@ For further information, contributions, or queries, please contact:
 - **Email**: [fp409@cam.ac.uk](mailto:fp409@cam.ac.uk)
 - **GitHub**: [fberkemeier](https://github.com/fberkemeier)
 
-Should any bugs arise or if you have any questions about usage, please raise a [GitHub issue](https://github.com/fberkemeier/replication-completion/issues).
+Should any bugs arise or if you have any questions about usage, please raise a [GitHub issue](https://github.com/fberkemeier/replication-timing-bounds/issues).
 
 ## References
 
