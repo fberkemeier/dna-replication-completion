@@ -14,8 +14,8 @@ replication domains.
 
 ## Repository layout
 
-- `repliseq_completion_bounds.ipynb`: main analysis notebook.
-- `repliseq_completion_bounds.py`: trimmed helper module used by the notebook.
+- `replication_completion_bounds.ipynb`: main analysis notebook.
+- `replication_completion_bounds.py`: trimmed helper module used by the notebook.
 - `requirements.txt`: Python runtime dependencies.
 - `data/`: Repli-seq bigWig inputs used by the notebook.
 
@@ -30,7 +30,7 @@ From the repository root, install the Python dependencies:
 pip install -r requirements.txt
 ```
 
-Then open `repliseq_completion_bounds.ipynb` in Jupyter from the repository root
+Then open `replication_completion_bounds.ipynb` in Jupyter from the repository root
 so the notebook can import the local helper module and find the `data/` files.
 
 ## Workflow
@@ -167,7 +167,7 @@ For further information, contributions, or queries, please contact:
 - **Email**: [fp409@cam.ac.uk](mailto:fp409@cam.ac.uk)
 - **GitHub**: [fberkemeier](https://github.com/fberkemeier)
 
-Should any bugs arise or if you have any questions about usage, please raise a [GitHub issue](https://github.com/fberkemeier/replication-timing-bounds/issues).
+Should any bugs arise or if you have any questions about usage, please raise a [GitHub issue](https://github.com/fberkemeier/replication-completion/issues).
 
 ## References
 

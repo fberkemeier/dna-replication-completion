@@ -1,4 +1,4 @@
-"""Core helpers for the Repli-seq completion-bounds notebook."""
+"""Core helpers for the replication completion-bounds notebook."""
 
 import heapq
 import math
