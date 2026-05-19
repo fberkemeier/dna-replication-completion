@@ -14,8 +14,9 @@ replication domains.
 
 ## Repository layout
 
-- `replication_completion_bounds.ipynb`: main analysis notebook.
-- `replication_completion_bounds.py`: trimmed helper module used by the notebook.
+- `replication_timing_bounds.ipynb`: main analysis notebook.
+- `replication_src.py`: reusable timing extraction, simulation,
+  completion-bound, plotting, and summary helpers used by the notebook.
 - `requirements.txt`: Python runtime dependencies.
 - `data/`: Repli-seq bigWig inputs used by the notebook.
 
@@ -30,13 +31,14 @@ From the repository root, install the Python dependencies:
 pip install -r requirements.txt
 ```
 
-Then open `replication_completion_bounds.ipynb` in Jupyter from the repository root
-so the notebook can import the local helper module and find the `data/` files.
+Then open `replication_timing_bounds.ipynb` in Jupyter from the repository root
+so the notebook can import the local tools module and find the `data/` files.
 
 ## Workflow
 
-The notebook is organized as an executable analysis record. It first defines
-shared utilities, then applies them to example domains.
+The notebook is organized as an executable analysis record. It imports reusable
+utilities from `replication_src.py`, then applies them to example
+domains.
 
 1. **Timing-profile extraction**
 
@@ -154,7 +156,7 @@ theoretical completion-bound calculations.
 
 ## System requirements
 
-This codebase was developed and tested on Python 3.12.3 under Windows 11. No installation procedure is required beyond installing standard Python 3 and the key dependencies. All scripts should remain compatible with standard Python 3 distributions on other operating systems.
+This codebase was developed and tested on Python 3.13.9 under Windows 11. No installation procedure is required beyond installing standard Python 3 and the key dependencies. All scripts should remain compatible with standard Python 3 distributions on other operating systems.
 
 ## License
 
