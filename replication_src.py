@@ -1255,12 +1255,14 @@ def fill_nan_linear(y):
 
 def prepare_timing_curve(positions_raw, timing_raw, resolution=10_000,
                          refine_factor=10, smooth_window=50,
-                         timing_range=(60, 10), slice_stop=None):
+                         timing_range=(60, 10), slice_stop=None,
+                         centromeres_bp=None, chrom=None,
+                         requested_chrom=None,
+                         centromere_fill_value=None):
     timing_filled = fill_nan_linear(timing_raw)
 
     timing = refinef_local(timing_filled, resolution_factor=refine_factor)
     timing = smoothf_local(timing, window=smooth_window)
-    timing = np.asarray(rescale(timing, timing_range), dtype=float)
 
     positions = refinef_local(positions_raw, resolution_factor=refine_factor)
 
@@ -1269,16 +1271,179 @@ def prepare_timing_curve(positions_raw, timing_raw, resolution=10_000,
         positions = positions[:slice_stop]
 
     dx_kb = resolution / refine_factor / 1000.0
+    timing_pre_rescale_before_centromere_override = np.asarray(timing, dtype=float).copy()
+
+    if centromere_fill_value is None:
+        if float(timing_range[0]) <= float(timing_range[1]):
+            fill_value = float(np.nanmin(timing))
+            fill_strategy = "pre_rescale_min_for_timing_min"
+        else:
+            fill_value = float(np.nanmax(timing))
+            fill_strategy = "pre_rescale_max_for_timing_min"
+    else:
+        fill_value = centromere_fill_value
+        fill_strategy = "explicit_pre_rescale"
+
+    timing_pre_rescale, centromere_mask, centromere_overrides = (
+        _apply_centromere_timing_override_array(
+            timing,
+            positions,
+            dx_kb,
+            centromeres_bp=centromeres_bp,
+            chrom=chrom,
+            requested_chrom=requested_chrom,
+            fill_value=fill_value,
+            fill_strategy=fill_strategy,
+            stage="pre_rescale",
+        )
+    )
+
+    timing_without_centromere_override = np.asarray(
+        rescale(timing_pre_rescale_before_centromere_override, timing_range),
+        dtype=float,
+    )
+    timing = np.asarray(rescale(timing_pre_rescale, timing_range), dtype=float)
+
+    if not centromere_overrides.empty:
+        rescaled_values = timing[centromere_mask]
+        fill_value_after_rescale = (
+            float(np.nanmin(rescaled_values)) if rescaled_values.size else np.nan
+        )
+        centromere_overrides = centromere_overrides.assign(
+            fill_value_after_rescale=fill_value_after_rescale,
+        )
 
     return {
         "positions_bp": positions,
         "positions_kb": positions / 1000.0,
         "timing_min": timing,
+        "timing_min_before_centromere_override": timing_without_centromere_override,
+        "timing_pre_rescale": timing_pre_rescale,
+        "timing_pre_rescale_before_centromere_override": (
+            timing_pre_rescale_before_centromere_override
+        ),
         "dx_kb": dx_kb,
         "refine_factor": refine_factor,
         "smooth_window": smooth_window,
         "timing_range": timing_range,
+        "centromere_override_mask": centromere_mask,
+        "centromere_override_value": (
+            float(centromere_overrides["fill_value_after_rescale"].iloc[0])
+            if not centromere_overrides.empty else np.nan
+        ),
+        "centromere_override_value_pre_rescale": (
+            float(centromere_overrides["fill_value"].iloc[0])
+            if not centromere_overrides.empty else np.nan
+        ),
+        "centromere_overrides": centromere_overrides,
     }
+
+
+def _normalise_centromere_intervals(centromeres_bp, chrom=None, requested_chrom=None):
+    if centromeres_bp is None:
+        return []
+
+    if isinstance(centromeres_bp, dict):
+        intervals = None
+        for key in (chrom, requested_chrom):
+            if key in centromeres_bp:
+                intervals = centromeres_bp[key]
+                break
+        if intervals is None:
+            return []
+    else:
+        intervals = centromeres_bp
+
+    if len(intervals) == 0:
+        return []
+
+    if len(intervals) == 2 and all(np.isscalar(x) for x in intervals):
+        intervals = [intervals]
+
+    normalised = []
+    for start_bp, end_bp in intervals:
+        start_bp = int(start_bp)
+        end_bp = int(end_bp)
+        if end_bp <= start_bp:
+            raise ValueError(f"Invalid centromere interval: {start_bp}-{end_bp}")
+        normalised.append((start_bp, end_bp))
+
+    return normalised
+
+
+def _apply_centromere_timing_override_array(timing, positions, dx_kb,
+                                            centromeres_bp, chrom=None,
+                                            requested_chrom=None,
+                                            fill_value=None,
+                                            fill_strategy="pre_rescale_min",
+                                            stage="pre_rescale"):
+    timing = np.asarray(timing, dtype=float).copy()
+    positions = np.asarray(positions, dtype=float)
+    mask = np.zeros(timing.size, dtype=bool)
+
+    intervals = _normalise_centromere_intervals(
+        centromeres_bp,
+        chrom=chrom,
+        requested_chrom=requested_chrom,
+    )
+    if not intervals:
+        return timing, mask, pd.DataFrame()
+
+    if fill_value is None:
+        fill_value = float(np.nanmin(timing))
+
+    dx_bp = float(dx_kb) * 1000.0
+    rows = []
+
+    for start_bp, end_bp in intervals:
+        interval_mask = (positions < end_bp) & ((positions + dx_bp) > start_bp)
+        timing[interval_mask] = fill_value
+        mask |= interval_mask
+        rows.append({
+            "chrom": chrom,
+            "requested_chrom": requested_chrom or chrom,
+            "start_bp": start_bp,
+            "end_bp": end_bp,
+            "fill_value": float(fill_value),
+            "fill_strategy": fill_strategy,
+            "stage": stage,
+            "bins": int(interval_mask.sum()),
+            "dx_kb": float(dx_kb),
+        })
+
+    return timing, mask, pd.DataFrame(rows)
+
+
+def apply_centromere_timing_override(prepared, centromeres_bp, timing_range,
+                                     chrom=None, requested_chrom=None,
+                                     fill_value=None):
+    if fill_value is None:
+        fill_value = 0.5 * (float(timing_range[0]) + float(timing_range[1]))
+
+    timing, mask, centromere_overrides = _apply_centromere_timing_override_array(
+        prepared["timing_min"],
+        prepared["positions_bp"],
+        prepared["dx_kb"],
+        centromeres_bp=centromeres_bp,
+        chrom=chrom,
+        requested_chrom=requested_chrom,
+        fill_value=fill_value,
+        fill_strategy="timing_range_midpoint",
+        stage="post_rescale",
+    )
+    if not centromere_overrides.empty:
+        centromere_overrides = centromere_overrides.assign(
+            fill_value_after_rescale=float(fill_value),
+        )
+
+    prepared["timing_min_before_centromere_override"] = prepared["timing_min"]
+    prepared["timing_min"] = timing
+    prepared["centromere_override_mask"] = mask
+    prepared["centromere_override_value"] = float(fill_value)
+    prepared["centromere_override_value_pre_rescale"] = np.nan
+    prepared["centromere_overrides"] = centromere_overrides
+
+    return prepared["centromere_overrides"]
 
 
 GEOMETRY_LABELS = {
@@ -1294,6 +1459,21 @@ def _higher_quantiles(x, q):
     q = np.asarray(q, dtype=float)
     k = np.clip(np.ceil(q * n).astype(int) - 1, 0, n - 1)
     return x[k]
+
+
+def _normalise_ignore_mask(ignore_mask, n, label="ignore_mask"):
+    if ignore_mask is None:
+        return np.zeros(n, dtype=bool)
+
+    ignore_mask = np.asarray(ignore_mask, dtype=bool)
+
+    if ignore_mask.ndim != 1 or ignore_mask.size != n:
+        raise ValueError(f"{label} must be a 1D boolean array with length {n}.")
+
+    if ignore_mask.all():
+        raise ValueError(f"{label} excludes every position.")
+
+    return ignore_mask
 
 
 def _width(sigma, L, vmin, geometry="torus"):
@@ -1571,7 +1751,7 @@ def completion_time_bound(eps, frates, vmin_grid=1.4, dx_grid=1.0,
     return T_bound, aux
 
 
-def empirical_completion_curve(rep_times_per_sim, eps_grid):
+def empirical_completion_curve(rep_times_per_sim, eps_grid, ignore_mask=None):
     """
     Empirical curve to compare with the uniform survival bound:
     max_x quantile_{1-eps} T(x), matching the L-infinity survival logic.
@@ -1581,12 +1761,15 @@ def empirical_completion_curve(rep_times_per_sim, eps_grid):
     if tau.ndim != 2:
         raise ValueError("rep_times_per_sim must have shape (n_sims, n_pos).")
 
+    ignore_mask = _normalise_ignore_mask(ignore_mask, tau.shape[1])
+    tau = tau[:, ~ignore_mask]
+
     q = 1.0 - np.asarray(eps_grid, dtype=float)
 
     return _higher_quantiles(tau, q).max(axis=1)
 
 
-def empirical_expected_time(rep_times_per_sim):
+def empirical_expected_time(rep_times_per_sim, ignore_mask=None):
     """
     Empirical max_x E[T(x)], matching the integrated uniform survival bound.
     """
@@ -1594,6 +1777,9 @@ def empirical_expected_time(rep_times_per_sim):
 
     if tau.ndim != 2:
         raise ValueError("rep_times_per_sim must have shape (n_sims, n_pos).")
+
+    ignore_mask = _normalise_ignore_mask(ignore_mask, tau.shape[1])
+    tau = tau[:, ~ignore_mask]
 
     return float(np.nanmax(np.nanmean(tau, axis=0)))
 
@@ -1629,15 +1815,18 @@ def expected_time_bound_from_curve(aux):
 def compare_completion_bounds(frates, rep_times_per_sim=None, fork_speed_grid=1.4,
                               dx_grid=1.0, dx_kb=None, eps_grid=None,
                               geometry="torus", num_t=4000,
-                              line_extension="finite"):
+                              line_extension="finite", ignore_mask=None):
     if eps_grid is None:
         eps_grid = np.geomspace(1e-4, 0.99, 100)
 
     eps_grid = np.asarray(eps_grid, dtype=float)
+    frates = np.asarray(frates, dtype=float)
+    ignore_mask = _normalise_ignore_mask(ignore_mask, frates.size)
+    frates_for_completion = frates[~ignore_mask]
 
     T_theory, aux = completion_time_bound(
         eps=eps_grid,
-        frates=frates,
+        frates=frates_for_completion,
         vmin_grid=fork_speed_grid,
         dx_grid=dx_grid,
         dx_kb=dx_kb,
@@ -1656,6 +1845,9 @@ def compare_completion_bounds(frates, rep_times_per_sim=None, fork_speed_grid=1.
         "fork_speed_grid": fork_speed_grid,
         "dx_grid": dx_grid,
         "dx_kb": dx_kb,
+        "ignore_mask": ignore_mask,
+        "ignored_positions": int(ignore_mask.sum()),
+        "used_positions": int((~ignore_mask).sum()),
     }
 
     out.update(expected_time_bound_from_curve(aux))
@@ -1667,9 +1859,11 @@ def compare_completion_bounds(frates, rep_times_per_sim=None, fork_speed_grid=1.
         out["T_empirical"] = empirical_completion_curve(
             rep_times_per_sim,
             eps_grid=eps_grid,
+            ignore_mask=ignore_mask,
         )
         out["expected_time_empirical_pointwise"] = empirical_expected_time(
             rep_times_per_sim,
+            ignore_mask=ignore_mask,
         )
 
     return out
@@ -1931,7 +2125,9 @@ def run_single_dataset(cfg, fork_speed_kb_min=1.4, sim_number=1000,
                        slice_stop=None, num_t_bound=4000,
                        max_rep_time=2000.0, timing_cache_mode="auto",
                        timing_dir=TIMING_DIR,
-                       overwrite_timing_cache=False):
+                       overwrite_timing_cache=False,
+                       centromeres_bp=None,
+                       centromere_fill_value=None):
     if eps_grid is None:
         eps_grid = np.geomspace(1e-4, 0.99, 100)
 
@@ -1955,10 +2151,38 @@ def run_single_dataset(cfg, fork_speed_kb_min=1.4, sim_number=1000,
         smooth_window=smooth_window,
         timing_range=timing_range,
         slice_stop=slice_stop,
+        centromeres_bp=centromeres_bp,
+        chrom=cfg["chrom"],
+        requested_chrom=cfg.get("requested_chrom", cfg["chrom"]),
+        centromere_fill_value=centromere_fill_value,
     )
+
+    centromere_overrides = prepared["centromere_overrides"]
+    if not centromere_overrides.empty:
+        overridden_bins = int(centromere_overrides["bins"].sum())
+        fill_value = float(centromere_overrides["fill_value"].iloc[0])
+        fill_value_after_rescale = float(
+            centromere_overrides["fill_value_after_rescale"].iloc[0]
+        )
+        strategy = str(centromere_overrides["fill_strategy"].iloc[0])
+        if strategy == "pre_rescale_min_for_timing_min":
+            value_label = "pre-rescale minimum for timing minimum"
+        elif strategy == "pre_rescale_max_for_timing_min":
+            value_label = "pre-rescale maximum for timing minimum"
+        else:
+            value_label = "pre-rescale value"
+        print(
+            f"Centromere override: set {overridden_bins:,} bins "
+            f"to {value_label} {fill_value:g} "
+            f"({fill_value_after_rescale:g} min after rescaling)"
+        )
 
     timedata = prepared["timing_min"]
     dx_kb = prepared["dx_kb"]
+    completion_ignore_mask = prepared.get("centromere_override_mask")
+    if completion_ignore_mask is None:
+        completion_ignore_mask = np.zeros(timedata.size, dtype=bool)
+    completion_ignore_mask = np.asarray(completion_ignore_mask, dtype=bool)
 
     # The simulation works in array indices, not physical kb.
     # Convert the physical speed in kb/min into grid sites/min.
@@ -1990,6 +2214,12 @@ def run_single_dataset(cfg, fork_speed_kb_min=1.4, sim_number=1000,
 
     rep_times_per_sim = simres["rep_times_per_sim"]
 
+    if completion_ignore_mask.any():
+        print(
+            f"T_epsilon summary: ignoring {int(completion_ignore_mask.sum()):,} "
+            "centromere bins in empirical and theoretical calculations"
+        )
+
     bounds = {}
 
     for geometry in cfg["bound_geometries"]:
@@ -2003,6 +2233,7 @@ def run_single_dataset(cfg, fork_speed_kb_min=1.4, sim_number=1000,
             geometry=geometry,
             num_t=num_t_bound,
             line_extension=cfg.get("line_extension", "finite"),
+            ignore_mask=completion_ignore_mask,
         )
 
     return {
@@ -2015,6 +2246,8 @@ def run_single_dataset(cfg, fork_speed_kb_min=1.4, sim_number=1000,
         "simres": simres,
         "rep_times_per_sim": rep_times_per_sim,
         "bounds": bounds,
+        "centromere_overrides": centromere_overrides,
+        "completion_ignore_mask": completion_ignore_mask,
         "fork_speed_kb_min": fork_speed_kb_min,
         "fork_speed_grid": fork_speed_grid,
         "sim_number": sim_number,
@@ -2061,7 +2294,6 @@ def make_standard_plots(result, save_figures=True,
     timedata = result["timedata"]
     frates = result["frates"]
     simres = result["simres"]
-    rep_times_per_sim = result["rep_times_per_sim"]
     bounds = result["bounds"]
 
     # Initiation-rate plot.
@@ -2071,7 +2303,7 @@ def make_standard_plots(result, save_figures=True,
             percentiles=initiation_ylim_percentiles,
         )
 
-    plotf(
+    fig, ax = plotf(
         frates,
         logyQ=True,
         x_array=positions_kb,
@@ -2082,13 +2314,15 @@ def make_standard_plots(result, save_figures=True,
         ytitle="Initiation rate",
         labels=[cfg["label"]],
         saveQ=False,
+        showQ=False,
+        return_handles=True,
     )
     if save_figures:
-        plt.savefig(FIGURE_DIR / f"{prefix}_initiation_rate.pdf", bbox_inches="tight")
+        fig.savefig(FIGURE_DIR / f"{prefix}_initiation_rate.pdf", bbox_inches="tight")
     plt.show()
 
     # Repli-seq versus simulation timing plot.
-    plotf(
+    fig, ax = plotf(
         timedata,
         simres["replication_timing"],
         x_array=positions_kb,
@@ -2097,22 +2331,13 @@ def make_standard_plots(result, save_figures=True,
         ytitle="Replication timing (min)",
         labels=["Repli-seq", "Simulation"],
         saveQ=False,
+        showQ=False,
+        return_handles=True,
     )
     if save_figures:
-        plt.savefig(FIGURE_DIR / f"{prefix}_timing_repliseq_vs_simulation.pdf", bbox_inches="tight")
+        fig.savefig(FIGURE_DIR / f"{prefix}_timing_repliseq_vs_simulation.pdf", bbox_inches="tight")
     plt.show()
-    '''
-    # Empirical replicated fraction map.
-    fig, ax, *_ = plot_replicated_fraction_map(
-        rep_times_per_sim,
-        positions_kb=positions_kb,
-        nt=300,
-        title=f"{cfg['label']}: empirical replicated fraction",
-    )
-    if save_figures:
-        fig.savefig(FIGURE_DIR / f"{prefix}_replicated_fraction_map.pdf", bbox_inches="tight")
-    plt.show()
-    '''
+
     # Bound versus empirical simulation.
     fig, ax = plot_geometry_bounds(
         bounds,
@@ -2122,33 +2347,6 @@ def make_standard_plots(result, save_figures=True,
     if save_figures:
         fig.savefig(FIGURE_DIR / f"{prefix}_bound_vs_simulation.pdf", bbox_inches="tight")
     plt.show()
-
-    # Expected-time summary derived from the same survival bound.
-    fig, ax = plot_expected_time_bounds(
-        bounds,
-        title=f"{cfg['label']}: expected local replication-time bound",
-    )
-    if save_figures:
-        fig.savefig(FIGURE_DIR / f"{prefix}_expected_time_bound.pdf", bbox_inches="tight")
-    plt.show()
-
-    # Tightness and local-mass plots for each geometry.
-    for geometry, bound_result in bounds.items():
-        fig, ax = plot_bound_tightness(
-            bound_result,
-            title=f"{cfg['label']}: tightness of {GEOMETRY_LABELS[geometry]} bound",
-        )
-        if save_figures:
-            fig.savefig(FIGURE_DIR / f"{prefix}_bound_tightness_{geometry}.pdf", bbox_inches="tight")
-        plt.show()
-
-        fig, ax = plot_local_mass(
-            bound_result,
-            title=f"{cfg['label']}: $m_I(r)$ for {GEOMETRY_LABELS[geometry]}",
-        )
-        if save_figures:
-            fig.savefig(FIGURE_DIR / f"{prefix}_local_mass_{geometry}.pdf", bbox_inches="tight")
-        plt.show()
 
 
 def run_dataset_collection(configs, selected_keys, **kwargs):
