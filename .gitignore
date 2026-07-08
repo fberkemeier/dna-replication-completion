@@ -10,5 +10,8 @@ __pycache__/
 # Generated figures
 figures/
 
+# Local input data
+data/
+
 # Local raw timing cache
 timing/
