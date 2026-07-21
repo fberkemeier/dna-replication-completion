@@ -1223,7 +1223,7 @@ def refinef_local(x, resolution_factor=1, mode="smooth"):
     raise ValueError("mode must be 'smooth' or 'const'")
 
 
-def smoothf_local(data, window=50):
+def smoothf_local(data, window=50, periodic=False):
     data = np.asarray(data, dtype=float)
     n = len(data)
 
@@ -1233,6 +1233,11 @@ def smoothf_local(data, window=50):
     window = int(max(1, min(window, n)))
     kernel = np.ones(window, dtype=float)
 
+    if periodic:
+        left_width = window // 2
+        right_width = window - 1 - left_width
+        padded = np.pad(data, (left_width, right_width), mode="wrap")
+        return np.convolve(padded, kernel / kernel.sum(), mode="valid")
 
     left = data[1:window + 1][::-1] if n > 1 else data
     right = data[-window - 1:-1][::-1] if n > 1 else data
@@ -1258,11 +1263,12 @@ def prepare_timing_curve(positions_raw, timing_raw, resolution=10_000,
                          timing_range=(60, 10), slice_stop=None,
                          centromeres_bp=None, chrom=None,
                          requested_chrom=None,
-                         centromere_fill_value=None):
+                         centromere_fill_value=None,
+                         periodic=False):
     timing_filled = fill_nan_linear(timing_raw)
 
     timing = refinef_local(timing_filled, resolution_factor=refine_factor)
-    timing = smoothf_local(timing, window=smooth_window)
+    timing = smoothf_local(timing, window=smooth_window, periodic=periodic)
 
     positions = refinef_local(positions_raw, resolution_factor=refine_factor)
 
@@ -2155,6 +2161,7 @@ def run_single_dataset(cfg, fork_speed_kb_min=1.4, sim_number=1000,
         chrom=cfg["chrom"],
         requested_chrom=cfg.get("requested_chrom", cfg["chrom"]),
         centromere_fill_value=centromere_fill_value,
+        periodic=cfg["fit_periodic"],
     )
 
     centromere_overrides = prepared["centromere_overrides"]
@@ -2296,6 +2303,23 @@ def make_standard_plots(result, save_figures=True,
     simres = result["simres"]
     bounds = result["bounds"]
 
+    periodic_plot = bool(cfg.get("fit_periodic") and cfg.get("sim_periodic"))
+    if periodic_plot and positions_kb.size:
+        closed_positions_kb = np.append(
+            positions_kb,
+            positions_kb[-1] + result["prepared"]["dx_kb"],
+        )
+        closed_timedata = np.append(timedata, timedata[0])
+        closed_frates = np.append(frates, frates[0])
+        closed_simulation_timing = np.append(
+            simres["replication_timing"],
+            simres["replication_timing"][0],
+        )
+    else:
+        closed_positions_kb = positions_kb
+        closed_timedata = timedata
+        closed_frates = frates
+        closed_simulation_timing = simres["replication_timing"]
 
     if initiation_ylims is None:
         initiation_ylims = _positive_percentile_limits(
@@ -2304,9 +2328,9 @@ def make_standard_plots(result, save_figures=True,
         )
 
     fig, ax = plotf(
-        frates,
+        closed_frates,
         logyQ=True,
-        x_array=positions_kb,
+        x_array=closed_positions_kb,
         invyQ=initiation_invert_y,
         xlims=initiation_xlims,
         ylims=initiation_ylims,
@@ -2323,9 +2347,9 @@ def make_standard_plots(result, save_figures=True,
 
 
     fig, ax = plotf(
-        timedata,
-        simres["replication_timing"],
-        x_array=positions_kb,
+        closed_timedata,
+        closed_simulation_timing,
+        x_array=closed_positions_kb,
         invyQ=False,
         xtitle="Chromosome position (kb)",
         ytitle="Replication timing (min)",
@@ -2424,113 +2448,6 @@ def expected_time_summary_table(results):
     return pd.DataFrame(rows)
 
 
-def completion_tepsilon_difference_table(results, epsilon, geometry=None):
-    rows = []
-
-    for key, result in results.items():
-        cfg = result["config"]
-        geometries = [geometry] if geometry is not None else list(result["bounds"])
-
-        for geometry_name in geometries:
-            bound_result = result["bounds"][geometry_name]
-            if "T_empirical" not in bound_result:
-                raise ValueError("completion_tepsilon_difference_table requires empirical simulations")
-
-            eps_grid = bound_result["eps"]
-            T_theory = float(np.interp(epsilon, eps_grid, bound_result["T_theory"]))
-            T_empirical = float(np.interp(epsilon, eps_grid, bound_result["T_empirical"]))
-            error = T_theory - T_empirical
-            timing_range = result.get("prepared", {}).get("timing_range", (np.nan, np.nan))
-
-            rows.append({
-                "dataset_key": key,
-                "dataset_label": cfg["label"],
-                "geometry": geometry_name,
-                "epsilon": float(epsilon),
-                "center_kb": cfg.get("center_kb", np.nan),
-                "variable_x_kb": cfg.get("variable_x_kb", np.nan),
-                "variable_t_min": cfg.get("variable_t_min", timing_range[1]),
-                "time_range_start_min": timing_range[0],
-                "T_empirical_min": T_empirical,
-                "T_theory_min": T_theory,
-                "error_min": error,
-                "abs_error_min": abs(error),
-                "mse_min2": mean_squared_error([T_theory], [T_empirical]),
-                "topology": cfg.get("topology", "periodic" if cfg.get("sim_periodic") else "line"),
-                "sim_periodic": bool(cfg.get("sim_periodic")),
-                "fit_periodic": bool(cfg.get("fit_periodic")),
-                "sim_number": result.get("sim_number", np.nan),
-            })
-
-    return pd.DataFrame(rows)
-
-
-def completion_tepsilon_mse_table(results, epsilon, geometry=None):
-    return completion_tepsilon_difference_table(
-        results,
-        epsilon=epsilon,
-        geometry=geometry,
-    )
-
-
-def plot_completion_tepsilon_difference_heatmap(
-    table,
-    x_col="variable_x_kb",
-    y_col="variable_t_min",
-    value_col="abs_error_min",
-    title=None,
-    cmap="magma",
-    colorbar_label=None,
-):
-    pivot = (
-        table
-        .pivot(index=y_col, columns=x_col, values=value_col)
-        .sort_index()
-        .sort_index(axis=1)
-    )
-
-    fig, ax = plt.subplots(figsize=(7.0, 4.8))
-    image = ax.imshow(pivot.to_numpy(dtype=float), origin="lower", aspect="auto", cmap=cmap)
-    ax.set_xticks(np.arange(pivot.shape[1]))
-    ax.set_xticklabels([f"{value:g}" for value in pivot.columns])
-    ax.set_yticks(np.arange(pivot.shape[0]))
-    ax.set_yticklabels([f"{value:g}" for value in pivot.index])
-    ax.set_xlabel("Half-width variable_x (kb)")
-    ax.set_ylabel("Rescale endpoint variable_t (min)")
-    ax.set_title(title or r"Fixed-$\varepsilon$ completion-time absolute difference")
-    cbar = fig.colorbar(image, ax=ax)
-    if colorbar_label is None:
-        colorbar_labels = {
-            "abs_error_min": r"$|T_{\varepsilon,\mathrm{bound}} - T_{\varepsilon,\mathrm{empirical}}|$ (min)",
-            "error_min": r"$T_{\varepsilon,\mathrm{bound}} - T_{\varepsilon,\mathrm{empirical}}$ (min)",
-            "mse_min2": r"MSE between empirical and bound $T_\varepsilon$ (min$^2$)",
-        }
-        colorbar_label = colorbar_labels.get(value_col, value_col)
-    cbar.set_label(colorbar_label)
-    plt.tight_layout()
-
-    return fig, ax, pivot
-
-
-def plot_completion_tepsilon_mse_heatmap(
-    table,
-    x_col="variable_x_kb",
-    y_col="variable_t_min",
-    value_col="mse_min2",
-    title=None,
-    cmap="magma",
-):
-    return plot_completion_tepsilon_difference_heatmap(
-        table,
-        x_col=x_col,
-        y_col=y_col,
-        value_col=value_col,
-        title=title or r"Fixed-$\varepsilon$ completion-time MSE",
-        cmap=cmap,
-        colorbar_label=r"MSE between empirical and bound $T_\varepsilon$ (min$^2$)",
-    )
-
-
 __all__ = [
     "DATA_DIR",
     "FIGURE_DIR",
@@ -2543,8 +2460,6 @@ __all__ = [
     "build_chromosome_configs_for_cell_lines",
     "build_periodic_interval_configs",
     "compare_completion_bounds",
-    "completion_tepsilon_difference_table",
-    "completion_tepsilon_mse_table",
     "completion_summary_table",
     "completion_survival_exponent_curve",
     "completion_time_bound",
@@ -2568,8 +2483,6 @@ __all__ = [
     "map_timing_firing",
     "mean_squared_error",
     "plot_bound_tightness",
-    "plot_completion_tepsilon_difference_heatmap",
-    "plot_completion_tepsilon_mse_heatmap",
     "plot_expected_time_bounds",
     "plot_expected_time_pair_scatter",
     "plot_geometry_bounds",

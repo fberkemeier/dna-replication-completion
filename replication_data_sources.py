@@ -534,68 +534,6 @@ def build_zhao_hct116_periodic_configs(
     return configs
 
 
-def build_zhao_hct116_centered_window_configs(
-    center_kb,
-    half_widths_kb,
-    chrom="chr8",
-    periodic=True,
-    resolution=DEFAULT_ZHAO_HCT116_ANALYSIS_RESOLUTION,
-    accession=DEFAULT_ZHAO_HCT116_GSE_ACCESSION,
-    source_resolution=DEFAULT_ZHAO_HCT116_SOURCE_RESOLUTION,
-    cell_line="HCT116",
-):
-    half_widths_kb = np.atleast_1d(np.asarray(half_widths_kb, dtype=float))
-    if np.any(~np.isfinite(half_widths_kb)) or np.any(half_widths_kb <= 0):
-        raise ValueError("half_widths_kb must contain positive finite values")
-
-    center_kb = float(center_kb)
-    if not np.isfinite(center_kb):
-        raise ValueError("center_kb must be finite")
-
-    topology = "periodic" if periodic else "line"
-    geometry = "torus" if periodic else "line"
-    configs = {}
-
-    for half_width_kb in half_widths_kb:
-        start = int(round((center_kb - float(half_width_kb)) * 1000.0))
-        end = int(round((center_kb + float(half_width_kb)) * 1000.0))
-        if end <= start:
-            raise ValueError("Each centered window must have positive length")
-
-        region_id = safe_filename(
-            f"{chrom}_center_{center_kb:g}kb_half_{half_width_kb:g}kb_{topology}"
-        ).upper()
-        key = f"{cell_line}_{region_id}"
-        label = f"{chrom}:{start}-{end} {topology} window"
-        short_label = f"{chrom} center {center_kb:g} kb half {half_width_kb:g} kb {topology}"
-
-        configs[key] = {
-            "key": key,
-            "label": f"{cell_line}, {label}",
-            "short_label": f"{cell_line} {short_label}",
-            "point_label": f"{cell_line} {short_label}",
-            "cell_line": cell_line,
-            "chrom": chrom,
-            "requested_chrom": chrom,
-            "start": start,
-            "end": end,
-            "resolution": int(resolution),
-            "fit_periodic": bool(periodic),
-            "sim_periodic": bool(periodic),
-            "bound_geometries": [geometry],
-            "line_extension": "finite",
-            "analysis_type": f"zhao_hct116_{topology}_centered_window",
-            "data_source": accession,
-            "source_resolution": source_resolution,
-            "timing_method": "weighted_mean_S1_to_S16_then_linear_interpolation",
-            "center_kb": center_kb,
-            "variable_x_kb": float(half_width_kb),
-            "topology": topology,
-        }
-
-    return configs
-
-
 def save_zhao_hct116_timing_csv(
     cfg,
     matrix,
@@ -657,7 +595,6 @@ __all__ = [
     "DEFAULT_ZHAO_HCT116_S_PHASE_BINS",
     "DEFAULT_ZHAO_HCT116_SOURCE_RESOLUTION",
     "build_ucsc_repliseq_line_datasets",
-    "build_zhao_hct116_centered_window_configs",
     "build_zhao_hct116_periodic_configs",
     "default_zhao_hct116_repliseq_paths",
     "download_ucsc_repliseq_wavelet_bigwig",
