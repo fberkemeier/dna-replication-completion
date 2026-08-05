@@ -224,15 +224,15 @@ def load_ucsc_repliseq_wavelet_array(
     return signal, positions, path
 
 
-def ucsc_repliseq_line_config(cell_line, chrom, positions, resolution, bigwig_path):
+def ucsc_repliseq_interval_config(cell_line, chrom, positions, resolution, bigwig_path):
     start = int(positions[0])
     end = int(positions[-1] + resolution)
-    key = f"{cell_line}_line_{safe_filename(chrom)}"
+    key = f"{cell_line}_interval_{safe_filename(chrom)}"
 
     return {
         "key": key,
-        "label": f"{cell_line}, {chrom} UCSC Repli-seq wavelet profile",
-        "short_label": f"{cell_line} {chrom} UCSC wavelet",
+        "label": f"{cell_line}, {chrom} UCSC Repli-seq finite interval",
+        "short_label": f"{cell_line} {chrom} interval",
         "point_label": f"{cell_line} {chrom}",
         "cell_line": cell_line,
         "chrom": chrom,
@@ -242,8 +242,9 @@ def ucsc_repliseq_line_config(cell_line, chrom, positions, resolution, bigwig_pa
         "resolution": resolution,
         "fit_periodic": False,
         "sim_periodic": False,
-        "bound_geometries": ["line"],
-        "analysis_type": "ucsc_wavelet_line_profile",
+        "bound_geometries": ["interval"],
+        "boundary_conditions": "zero_inflow",
+        "analysis_type": "ucsc_wavelet_interval_profile",
         "source_bigwig": str(bigwig_path),
     }
 
@@ -284,7 +285,7 @@ def ucsc_repliseq_timing_table(
     })
 
 
-def build_ucsc_repliseq_line_datasets(
+def build_ucsc_repliseq_interval_datasets(
     cell_lines,
     chroms,
     resolution=1_000,
@@ -310,7 +311,7 @@ def build_ucsc_repliseq_line_datasets(
             )
             fill_mask = np.zeros(signal.size, dtype=bool)
 
-            cfg = ucsc_repliseq_line_config(
+            cfg = ucsc_repliseq_interval_config(
                 cell_line,
                 chrom,
                 positions,
@@ -594,7 +595,7 @@ __all__ = [
     "DEFAULT_ZHAO_HCT116_REPLISEQ_URL",
     "DEFAULT_ZHAO_HCT116_S_PHASE_BINS",
     "DEFAULT_ZHAO_HCT116_SOURCE_RESOLUTION",
-    "build_ucsc_repliseq_line_datasets",
+    "build_ucsc_repliseq_interval_datasets",
     "build_zhao_hct116_periodic_configs",
     "default_zhao_hct116_repliseq_paths",
     "download_ucsc_repliseq_wavelet_bigwig",
@@ -607,7 +608,7 @@ __all__ = [
     "save_zhao_hct116_timing_csv",
     "ucsc_repliseq_bigwig_status_table",
     "ucsc_repliseq_cell_line_name",
-    "ucsc_repliseq_line_config",
+    "ucsc_repliseq_interval_config",
     "ucsc_repliseq_timing_table",
     "ucsc_repliseq_wavelet_filename",
     "ucsc_repliseq_wavelet_path",

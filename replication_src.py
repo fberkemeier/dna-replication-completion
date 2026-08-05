@@ -861,7 +861,7 @@ def require_chrom_name(chrom, chrom_sizes, cell_line, resolution):
 
 
 def build_chromosome_configs(cell_line="DM", chroms=("chr20",), resolution=10_000,
-                             data_dir=DATA_DIR, analysis_tag="line"):
+                             data_dir=DATA_DIR, analysis_tag="interval"):
     chrom_sizes = get_bigwig_chrom_sizes(
         cell_line=cell_line,
         resolution=resolution,
@@ -885,8 +885,8 @@ def build_chromosome_configs(cell_line="DM", chroms=("chr20",), resolution=10_00
 
         configs[key] = {
             "key": key,
-            "label": f"{cell_line}, {requested_chrom} line profile",
-            "short_label": f"{cell_line} {requested_chrom} line",
+            "label": f"{cell_line}, {requested_chrom} finite interval",
+            "short_label": f"{cell_line} {requested_chrom} interval",
             "point_label": f"{cell_line} {requested_chrom}",
             "cell_line": cell_line,
             "chrom": chrom,
@@ -896,8 +896,9 @@ def build_chromosome_configs(cell_line="DM", chroms=("chr20",), resolution=10_00
             "resolution": resolution,
             "fit_periodic": False,
             "sim_periodic": False,
-            "bound_geometries": ["line"],
-            "analysis_type": "line_profile",
+            "bound_geometries": ["interval"],
+            "boundary_conditions": "zero_inflow",
+            "analysis_type": "interval_profile",
         }
 
     return configs
@@ -905,7 +906,7 @@ def build_chromosome_configs(cell_line="DM", chroms=("chr20",), resolution=10_00
 
 def build_chromosome_configs_for_cell_lines(cell_lines, chroms=("chr20",),
                                            resolution=10_000, data_dir=DATA_DIR,
-                                           analysis_tag="line"):
+                                           analysis_tag="interval"):
     configs = {}
 
     for cell_line in cell_lines:
@@ -1454,6 +1455,7 @@ def apply_centromere_timing_override(prepared, centromeres_bp, timing_range,
 
 GEOMETRY_LABELS = {
     "torus": r"Torus $\mathbb{T}_L$",
+    "interval": r"Interval $D=[0,L]$",
     "line": r"Full line $\mathbb{R}$",
     "halfline": r"Half-line $\mathbb{R}_+$",
 }
@@ -1482,11 +1484,45 @@ def _normalise_ignore_mask(ignore_mask, n, label="ignore_mask"):
     return ignore_mask
 
 
+def _boundary_buffer_ignore_mask(positions_bp, dx_bp, buffer_bp):
+    positions_bp = np.asarray(positions_bp, dtype=float)
+
+    if positions_bp.ndim != 1 or positions_bp.size == 0:
+        raise ValueError("positions_bp must be a non-empty 1D array.")
+
+    buffer_bp = float(buffer_bp)
+    dx_bp = float(dx_bp)
+
+    if buffer_bp < 0 or dx_bp <= 0:
+        raise ValueError("buffer_bp must be nonnegative and dx_bp must be positive.")
+
+    domain_start_bp = float(positions_bp[0])
+    domain_end_bp = float(positions_bp[-1] + dx_bp)
+    domain_length_bp = domain_end_bp - domain_start_bp
+
+    if 2.0 * buffer_bp >= domain_length_bp:
+        raise ValueError(
+            "The empirical interior buffer excludes the complete spatial domain."
+        )
+
+    target_start_bp = domain_start_bp + buffer_bp
+    target_end_bp = domain_end_bp - buffer_bp
+    mask = (
+        (positions_bp < target_start_bp)
+        | ((positions_bp + dx_bp) > target_end_bp)
+    )
+
+    return mask, target_start_bp, target_end_bp
+
+
 def _width(sigma, L, vmin, geometry="torus"):
     sigma = np.asarray(sigma, dtype=float)
 
     if geometry == "torus":
         return np.minimum(2.0 * vmin * sigma, L)
+
+    if geometry == "interval":
+        return np.minimum(vmin * sigma, L)
 
     if geometry == "line":
         return 2.0 * vmin * sigma
@@ -1494,7 +1530,7 @@ def _width(sigma, L, vmin, geometry="torus"):
     if geometry == "halfline":
         return vmin * sigma
 
-    raise ValueError("geometry must be 'torus', 'line', or 'halfline'")
+    raise ValueError("geometry must be 'torus', 'interval', 'line', or 'halfline'")
 
 
 def _torus_local_mass(I, lengths, dx=1.0):
@@ -1533,25 +1569,22 @@ def _torus_local_mass(I, lengths, dx=1.0):
         totals = dx * (prefix[idx + q] - prefix[idx])
 
         if frac > 0:
-            totals = totals + frac * dx * I[(idx + q) % n]
-
-        out[k] = np.min(totals)
+            left_aligned = totals + frac * dx * I[(idx + q) % n]
+            right_aligned = totals + frac * dx * I[(idx - 1) % n]
+            out[k] = min(np.min(left_aligned), np.min(right_aligned))
+        else:
+            out[k] = np.min(totals)
 
     return out
 
 
-def _line_local_mass_finite(I, lengths, dx=1.0):
+def _interval_local_mass(I, lengths, dx=1.0):
     """
-    Local initiation mass on a finite, non-wrapping profile.
+    Local initiation mass on the finite interval D=[0,L].
 
-    This is the practical finite-window version used for non-periodic
-    chromosome-scale simulations. With the default dx=1, I is
-    treated as a fitted rate per grid site per minute, and m_I(r)
-    is obtained by summing rates over non-wrapping intervals of grid length r.
-
-    Note that a strict full-line bound would require a model for I(x) outside
-    the observed chromosome/window. Here we compare against the observed
-    finite profile without circular wrap-around, which matches perQ=False.
+    With the default dx=1, I is treated as a fitted rate per grid site per
+    minute, and m_I,D(r) is obtained by summing rates over non-wrapping
+    subintervals of D.
     """
     I = np.asarray(I, dtype=float)
     lengths = np.atleast_1d(np.asarray(lengths, dtype=float))
@@ -1577,21 +1610,23 @@ def _line_local_mass_finite(I, lengths, dx=1.0):
         frac = u - q
 
         if frac > 0:
-            max_start = n - q - 1
+            left_idx = np.arange(n - q)
+            left_totals = dx * (
+                prefix[left_idx + q] - prefix[left_idx]
+            )
+            left_totals = left_totals + frac * dx * I[left_idx + q]
+
+            right_idx = np.arange(1, n - q + 1)
+            right_totals = dx * (
+                prefix[right_idx + q] - prefix[right_idx]
+            )
+            right_totals = right_totals + frac * dx * I[right_idx - 1]
+
+            out[k] = min(np.min(left_totals), np.min(right_totals))
         else:
-            max_start = n - q
-
-        if max_start <= 0:
-            out[k] = total_mass
-            continue
-
-        idx = np.arange(max_start)
-        totals = dx * (prefix[idx + q] - prefix[idx])
-
-        if frac > 0:
-            totals = totals + frac * dx * I[idx + q]
-
-        out[k] = np.min(totals)
+            idx = np.arange(n - q + 1)
+            totals = dx * (prefix[idx + q] - prefix[idx])
+            out[k] = np.min(totals)
 
     return out
 
@@ -1600,8 +1635,7 @@ def _periodic_extension_local_mass(I, lengths, dx=1.0):
     """
     Optional local mass on R using a periodic extension of the fitted landscape.
 
-    This is useful for topology-only comparisons, but is not used by default
-    for the non-periodic full-line analysis.
+    This is useful for topology-only comparisons.
     """
     I = np.asarray(I, dtype=float)
     lengths = np.atleast_1d(np.asarray(lengths, dtype=float))
@@ -1628,24 +1662,31 @@ def _periodic_extension_local_mass(I, lengths, dx=1.0):
     return out
 
 
-def _local_mass(I, lengths, dx=1.0, geometry="torus", line_extension="finite"):
+def _local_mass(I, lengths, dx=1.0, geometry="torus", line_extension=None):
     if geometry == "torus":
         return _torus_local_mass(I, lengths, dx=dx)
 
-    if geometry in {"line", "halfline"}:
-        if line_extension == "finite":
-            return _line_local_mass_finite(I, lengths, dx=dx)
-        if line_extension == "periodic":
-            return _periodic_extension_local_mass(I, lengths, dx=dx)
+    if geometry == "interval":
+        return _interval_local_mass(I, lengths, dx=dx)
 
-    raise ValueError("Invalid geometry or line_extension.")
+    if geometry == "line" and line_extension == "periodic":
+        return _periodic_extension_local_mass(I, lengths, dx=dx)
+
+    if geometry in {"line", "halfline"}:
+        raise ValueError(
+            "A finite initiation-rate array does not define a full-line or "
+            "half-line local mass. Use geometry='interval', geometry='torus', "
+            "or provide the explicit periodic full-line extension."
+        )
+
+    raise ValueError(f"Unsupported geometry: {geometry!r}.")
 
 
 def completion_survival_exponent_curve(frates, vmin_grid=1.4, dx_grid=1.0, dx_kb=None,
                                        geometry="torus", rhs_max=None, num_t=4000,
-                                       line_extension="finite"):
+                                       line_extension=None):
     """
-    Build F(t) = int_0^t m_I(w_geometry(sigma)) d sigma.
+    Build a certified lower approximation of the survival exponent.
 
     Parameters
     ----------
@@ -1681,8 +1722,8 @@ def completion_survival_exponent_curve(frates, vmin_grid=1.4, dx_grid=1.0, dx_kb
     if rhs_max is None:
         rhs_max = np.log(1.0 / 1e-4)
 
-    t_wrap = L_grid / (2.0 * vmin_grid)
-    t_max = t_wrap + rhs_max / max(total_mass, 1e-12) + dx_grid / vmin_grid
+    t_reference = L_grid / (2.0 * vmin_grid)
+    t_max = t_reference + rhs_max / max(total_mass, 1e-12) + dx_grid / vmin_grid
 
     while True:
         t = np.linspace(0.0, t_max, num_t)
@@ -1701,7 +1742,7 @@ def completion_survival_exponent_curve(frates, vmin_grid=1.4, dx_grid=1.0, dx_kb
         dt = np.diff(t)
         F = np.empty_like(t)
         F[0] = 0.0
-        F[1:] = np.cumsum(0.5 * (mI[:-1] + mI[1:]) * dt)
+        F[1:] = np.cumsum(mI[:-1] * dt)
 
         if F[-1] >= rhs_max:
             break
@@ -1716,7 +1757,6 @@ def completion_survival_exponent_curve(frates, vmin_grid=1.4, dx_grid=1.0, dx_kb
         "vmin_grid": float(vmin_grid),
         "geometry": geometry,
         "geometry_label": GEOMETRY_LABELS[geometry],
-        "line_extension": line_extension,
         "t": t,
         "r": r_grid,
         "mI": mI,
@@ -1728,12 +1768,15 @@ def completion_survival_exponent_curve(frates, vmin_grid=1.4, dx_grid=1.0, dx_kb
         out["r_kb"] = r_grid * dx_kb / dx_grid
         out["vmin_kb_min"] = vmin_grid * dx_kb / dx_grid
 
+    if geometry == "line":
+        out["line_extension"] = line_extension
+
     return out
 
 
 def completion_time_bound(eps, frates, vmin_grid=1.4, dx_grid=1.0,
                           dx_kb=None, geometry="torus", num_t=4000,
-                          line_extension="finite"):
+                          line_extension=None):
     eps = np.asarray(eps, dtype=float)
 
     if np.any((eps <= 0) | (eps >= 1)):
@@ -1752,7 +1795,8 @@ def completion_time_bound(eps, frates, vmin_grid=1.4, dx_grid=1.0,
         line_extension=line_extension,
     )
 
-    T_bound = np.interp(rhs, aux["F"], aux["t"])
+    threshold_indices = np.searchsorted(aux["F"], rhs, side="left")
+    T_bound = aux["t"][threshold_indices]
 
     return T_bound, aux
 
@@ -1792,19 +1836,18 @@ def empirical_expected_time(rep_times_per_sim, ignore_mask=None):
 
 def expected_time_bound_from_curve(aux):
     """
-    Integrate the survival upper bound to obtain an expected-time bound.
-
-    The tail beyond the last tabulated time is bounded using the final slope
-    of F, which is valid because the local-mass curve is non-decreasing.
+    Integrate a one-sided survival estimate to bound the expected time.
     """
     t = np.asarray(aux["t"], dtype=float)
     F = np.asarray(aux["F"], dtype=float)
     mI = np.asarray(aux["mI"], dtype=float)
 
     survival_upper = np.exp(-F)
-    trapz = getattr(np, "trapezoid", np.trapz)
-    body = float(trapz(survival_upper, t))
-    tail_rate = max(float(mI[-1]), 1e-12)
+    dt = np.diff(t)
+    body = float(np.sum(survival_upper[:-1] * dt))
+    tail_rate = float(mI[-1])
+    if not np.isfinite(tail_rate) or tail_rate <= 0:
+        raise ValueError("The final local mass must be positive to bound the tail.")
     tail = float(survival_upper[-1] / tail_rate)
     total = body + tail
 
@@ -1821,18 +1864,17 @@ def expected_time_bound_from_curve(aux):
 def compare_completion_bounds(frates, rep_times_per_sim=None, fork_speed_grid=1.4,
                               dx_grid=1.0, dx_kb=None, eps_grid=None,
                               geometry="torus", num_t=4000,
-                              line_extension="finite", ignore_mask=None):
+                              line_extension=None, ignore_mask=None):
     if eps_grid is None:
         eps_grid = np.geomspace(1e-4, 0.99, 100)
 
     eps_grid = np.asarray(eps_grid, dtype=float)
     frates = np.asarray(frates, dtype=float)
     ignore_mask = _normalise_ignore_mask(ignore_mask, frates.size)
-    frates_for_completion = frates[~ignore_mask]
 
     T_theory, aux = completion_time_bound(
         eps=eps_grid,
-        frates=frates_for_completion,
+        frates=frates,
         vmin_grid=fork_speed_grid,
         dx_grid=dx_grid,
         dx_kb=dx_kb,
@@ -1847,16 +1889,20 @@ def compare_completion_bounds(frates, rep_times_per_sim=None, fork_speed_grid=1.
         "aux": aux,
         "geometry": geometry,
         "geometry_label": GEOMETRY_LABELS[geometry],
-        "line_extension": line_extension,
         "fork_speed_grid": fork_speed_grid,
         "dx_grid": dx_grid,
         "dx_kb": dx_kb,
         "ignore_mask": ignore_mask,
         "ignored_positions": int(ignore_mask.sum()),
         "used_positions": int((~ignore_mask).sum()),
+        "theoretical_positions": int(frates.size),
+        "empirical_used_positions": int((~ignore_mask).sum()),
     }
 
     out.update(expected_time_bound_from_curve(aux))
+
+    if geometry == "line":
+        out["line_extension"] = line_extension
 
     if dx_kb is not None:
         out["fork_speed_kb_min"] = fork_speed_grid * dx_kb / dx_grid
@@ -1941,7 +1987,7 @@ def plot_geometry_bounds(results_by_geometry, title=None, empiricalQ=True):
                 first_res["eps"],
                 first_res["T_empirical"],
                 linestyle="--",
-                label="empirical simulation",
+                label=first_res.get("empirical_label", "empirical simulation"),
             )
 
     ax.set_xscale("log")
@@ -1958,6 +2004,7 @@ def plot_expected_time_bounds(results_by_geometry, title=None):
     items = list(results_by_geometry.items())
     labels = {
         "torus": "Torus",
+        "interval": "D=[0,L]",
         "line": "R",
         "halfline": "R+",
     }
@@ -2004,6 +2051,7 @@ def plot_expected_time_bounds(results_by_geometry, title=None):
 def expected_time_pair_table(results):
     labels = {
         "torus": "Torus",
+        "interval": "D=[0,L]",
         "line": "R",
         "halfline": "R+",
     }
@@ -2022,6 +2070,14 @@ def expected_time_pair_table(results):
                 "geometry_label": labels.get(geometry, bound_result.get("geometry_label", geometry)),
                 "E_empirical_pointwise_min": bound_result.get("expected_time_empirical_pointwise", np.nan),
                 "E_theory_min": bound_result["expected_time_bound"],
+                "empirical_interior_buffer_bp": bound_result.get(
+                    "empirical_interior_buffer_bp",
+                    np.nan,
+                ),
+                "expected_time_comparison_certified": bound_result.get(
+                    "expected_time_comparison_certified",
+                    True,
+                ),
             })
 
     return pd.DataFrame(rows)
@@ -2042,7 +2098,7 @@ def _resolve_axis_limits(requested, fallback):
 
 def plot_expected_time_pair_scatter(results, title=None, label_col="point_label",
                                     xlims=None, ylims=None,
-                                    equal_aspect=True):
+                                    equal_aspect=True, xlabel=None, ylabel=None):
     table = expected_time_pair_table(results)
     xcol = "E_empirical_pointwise_min"
     ycol = "E_theory_min"
@@ -2077,8 +2133,8 @@ def plot_expected_time_pair_scatter(results, title=None, label_col="point_label"
     ax.plot([ref_lo, ref_hi], [ref_lo, ref_hi], linestyle="--", linewidth=1, color="0.5")
     ax.set_xlim(xlims)
     ax.set_ylim(ylims)
-    ax.set_xlabel(r"Empirical $\max_x \mathbb{E}[T(x)]$ (min)")
-    ax.set_ylabel("Theoretical expected-time bound (min)")
+    ax.set_xlabel(xlabel or r"Empirical $\max_x \mathbb{E}[T(x)]$ (min)")
+    ax.set_ylabel(ylabel or "Theoretical expected-time bound (min)")
     ax.set_title(title or "Expected local replication-time bound")
     if equal_aspect:
         ax.set_aspect("equal", adjustable="box")
@@ -2133,14 +2189,47 @@ def run_single_dataset(cfg, fork_speed_kb_min=1.4, sim_number=1000,
                        timing_dir=TIMING_DIR,
                        overwrite_timing_cache=False,
                        centromeres_bp=None,
-                       centromere_fill_value=None):
+                       centromere_fill_value=None,
+                       empirical_interior_buffer_bp=None):
     if eps_grid is None:
         eps_grid = np.geomspace(1e-4, 0.99, 100)
+
+    bound_geometries = tuple(cfg["bound_geometries"])
+
+    if "interval" in bound_geometries:
+        if cfg["fit_periodic"] or cfg["sim_periodic"]:
+            raise ValueError(
+                "Interval bounds require non-periodic fitting and simulation."
+            )
+        if cfg.get("boundary_conditions") != "zero_inflow":
+            raise ValueError(
+                "Interval bounds require boundary_conditions='zero_inflow'."
+            )
+
+    if "torus" in bound_geometries:
+        if not cfg["fit_periodic"] or not cfg["sim_periodic"]:
+            raise ValueError(
+                "Torus bounds require periodic fitting and simulation."
+            )
+
+    if "line" in bound_geometries:
+        if cfg.get("line_extension") != "periodic":
+            raise ValueError(
+                "Full-line bounds from a finite profile require "
+                "line_extension='periodic'."
+            )
+        if not cfg["sim_periodic"] and empirical_interior_buffer_bp is None:
+            raise ValueError(
+                "A non-periodic simulation compared with the full-line bound "
+                "requires empirical_interior_buffer_bp."
+            )
 
     print(f"Processing: {cfg['label']}")
     print(f"Region: {cfg['chrom']}:{cfg['start']}-{cfg['end']}")
     print(f"Model periodicity: fit={cfg['fit_periodic']}, simulation={cfg['sim_periodic']}")
-    print(f"Bound geometries: {cfg['bound_geometries']}")
+    if "interval" in bound_geometries:
+        print("Boundary conditions: zero incoming forks at x=0 and x=L")
+    print(f"Bound geometries: {list(bound_geometries)}")
 
     positions_raw, timing_raw = get_timing_curve_from_config(
         cfg,
@@ -2186,12 +2275,24 @@ def run_single_dataset(cfg, fork_speed_kb_min=1.4, sim_number=1000,
 
     timedata = prepared["timing_min"]
     dx_kb = prepared["dx_kb"]
-    completion_ignore_mask = prepared.get("centromere_override_mask")
-    if completion_ignore_mask is None:
-        completion_ignore_mask = np.zeros(timedata.size, dtype=bool)
-    completion_ignore_mask = np.asarray(completion_ignore_mask, dtype=bool)
+    centromere_ignore_mask = prepared.get("centromere_override_mask")
+    if centromere_ignore_mask is None:
+        centromere_ignore_mask = np.zeros(timedata.size, dtype=bool)
+    centromere_ignore_mask = np.asarray(centromere_ignore_mask, dtype=bool)
 
+    boundary_ignore_mask = np.zeros(timedata.size, dtype=bool)
+    target_start_bp = float(prepared["positions_bp"][0])
+    target_end_bp = float(prepared["positions_bp"][-1] + dx_kb * 1000.0)
+    if empirical_interior_buffer_bp is not None:
+        boundary_ignore_mask, target_start_bp, target_end_bp = (
+            _boundary_buffer_ignore_mask(
+                prepared["positions_bp"],
+                dx_bp=dx_kb * 1000.0,
+                buffer_bp=empirical_interior_buffer_bp,
+            )
+        )
 
+    completion_ignore_mask = centromere_ignore_mask | boundary_ignore_mask
 
     fork_speed_grid = fork_speed_kb_min / dx_kb
 
@@ -2221,16 +2322,25 @@ def run_single_dataset(cfg, fork_speed_kb_min=1.4, sim_number=1000,
 
     rep_times_per_sim = simres["rep_times_per_sim"]
 
-    if completion_ignore_mask.any():
+    if centromere_ignore_mask.any():
         print(
-            f"T_epsilon summary: ignoring {int(completion_ignore_mask.sum()):,} "
-            "centromere bins in empirical and theoretical calculations"
+            f"Empirical target: ignoring {int(centromere_ignore_mask.sum()):,} "
+            "centromere bins in empirical target summaries; the theoretical "
+            "bound uses the complete fitted domain"
+        )
+
+    if boundary_ignore_mask.any():
+        print(
+            f"Empirical target: chromosome interior "
+            f"{target_start_bp / 1e6:g}-{target_end_bp / 1e6:g} Mb "
+            f"with a {float(empirical_interior_buffer_bp) / 1e6:g} Mb "
+            "buffer at each end"
         )
 
     bounds = {}
 
-    for geometry in cfg["bound_geometries"]:
-        bounds[geometry] = compare_completion_bounds(
+    for geometry in bound_geometries:
+        bound_result = compare_completion_bounds(
             frates=frates,
             rep_times_per_sim=rep_times_per_sim,
             fork_speed_grid=fork_speed_grid,
@@ -2239,9 +2349,50 @@ def run_single_dataset(cfg, fork_speed_kb_min=1.4, sim_number=1000,
             eps_grid=eps_grid,
             geometry=geometry,
             num_t=num_t_bound,
-            line_extension=cfg.get("line_extension", "finite"),
+            line_extension=cfg.get("line_extension"),
             ignore_mask=completion_ignore_mask,
         )
+        bound_result["empirical_interior_buffer_bp"] = (
+            None if empirical_interior_buffer_bp is None
+            else float(empirical_interior_buffer_bp)
+        )
+        bound_result["empirical_target_start_bp"] = target_start_bp
+        bound_result["empirical_target_end_bp"] = target_end_bp
+        bound_result["boundary_ignored_positions"] = int(boundary_ignore_mask.sum())
+        bound_result["centromere_ignored_positions"] = int(centromere_ignore_mask.sum())
+
+        if geometry == "line" and empirical_interior_buffer_bp is not None:
+            validity_horizon_min = (
+                float(empirical_interior_buffer_bp) / 1000.0 / fork_speed_kb_min
+            )
+            comparison_max_min = float(np.nanmax(bound_result["T_theory"]))
+            if "T_empirical" in bound_result:
+                comparison_max_min = max(
+                    comparison_max_min,
+                    float(np.nanmax(bound_result["T_empirical"])),
+                )
+            bound_result["interior_validity_horizon_min"] = validity_horizon_min
+            bound_result["interior_comparison_max_min"] = comparison_max_min
+            bound_result["interior_horizon_valid"] = (
+                comparison_max_min <= validity_horizon_min
+            )
+            bound_result["empirical_label"] = "empirical chromosome interior"
+            bound_result["expected_time_comparison_certified"] = False
+
+            if not bound_result["interior_horizon_valid"]:
+                raise ValueError(
+                    f"The full-line/interior comparison reaches "
+                    f"{comparison_max_min:g} min, beyond the buffer-validity "
+                    f"horizon {validity_horizon_min:g} min. Increase "
+                    "empirical_interior_buffer_bp or reduce the reported time range."
+                )
+
+            print(
+                f"Interior comparison horizon: {validity_horizon_min:g} min; "
+                f"largest compared T_epsilon: {comparison_max_min:g} min"
+            )
+
+        bounds[geometry] = bound_result
 
     return {
         "config": cfg,
@@ -2254,7 +2405,13 @@ def run_single_dataset(cfg, fork_speed_kb_min=1.4, sim_number=1000,
         "rep_times_per_sim": rep_times_per_sim,
         "bounds": bounds,
         "centromere_overrides": centromere_overrides,
+        "centromere_ignore_mask": centromere_ignore_mask,
+        "boundary_ignore_mask": boundary_ignore_mask,
         "completion_ignore_mask": completion_ignore_mask,
+        "empirical_target_mask": ~completion_ignore_mask,
+        "empirical_interior_buffer_bp": empirical_interior_buffer_bp,
+        "empirical_target_start_bp": target_start_bp,
+        "empirical_target_end_bp": target_end_bp,
         "fork_speed_kb_min": fork_speed_kb_min,
         "fork_speed_grid": fork_speed_grid,
         "sim_number": sim_number,
@@ -2404,6 +2561,18 @@ def completion_summary_table(results, eps_values=(0.1, 0.05, 0.01, 0.001)):
                     "fork_speed_kb_min": result.get("fork_speed_kb_min", np.nan),
                     "fork_speed_grid_per_min": result.get("fork_speed_grid", np.nan),
                     "T_theory_min": np.interp(eps, eps_grid, bound_result["T_theory"]),
+                    "empirical_interior_buffer_bp": bound_result.get(
+                        "empirical_interior_buffer_bp",
+                        np.nan,
+                    ),
+                    "interior_validity_horizon_min": bound_result.get(
+                        "interior_validity_horizon_min",
+                        np.nan,
+                    ),
+                    "interior_horizon_valid": bound_result.get(
+                        "interior_horizon_valid",
+                        True,
+                    ),
                 }
 
                 if "T_empirical" in bound_result:
@@ -2435,6 +2604,14 @@ def expected_time_summary_table(results):
                 "fork_speed_grid_per_min": result.get("fork_speed_grid", np.nan),
                 "E_theory_min": bound_result["expected_time_bound"],
                 "tail_fraction": bound_result["expected_time_bound_tail_fraction"],
+                "empirical_interior_buffer_bp": bound_result.get(
+                    "empirical_interior_buffer_bp",
+                    np.nan,
+                ),
+                "expected_time_comparison_certified": bound_result.get(
+                    "expected_time_comparison_certified",
+                    True,
+                ),
             }
 
             if "expected_time_empirical_pointwise" in bound_result:

@@ -86,10 +86,17 @@ domains.
 
 The notebook contains two ready-to-run analysis sections:
 
-- **Line domains**: chromosome-scale, non-periodic profiles compared with the
-  full-line theoretical bound.
+- **Chromosome interiors**: chromosome-scale profiles fitted and simulated
+  non-periodically, with empirical completion evaluated away from chromosome
+  endpoints and compared over its finite validity horizon with the full-line
+  bound for the periodically continued initiation landscape.
 - **Torus domains**: selected intervals treated as periodic domains and compared
   with the torus theoretical bound.
+
+For chromosome interiors, the finite-propagation certification applies to
+`T_epsilon` values within the configured buffer-crossing horizon. The full-line
+expected-time comparison is reported only as a numerical reference because it
+integrates beyond that finite horizon.
 
 New domains can be added by extending the dataset dictionaries in the notebook.
 Each dataset specifies the cell line, chromosome, start and end coordinates,
@@ -98,7 +105,7 @@ comparison.
 
 ## Usage
 
-For a single dataset, edit or select an entry in `LINE_PROFILE_DATASETS` or
+For a single dataset, edit or select an entry in `INTERVAL_PROFILE_DATASETS` or
 `PERIODIC_INTERVAL_DATASETS`, then run:
 
 ```python
@@ -173,4 +180,4 @@ Should any bugs arise or if you have any questions about usage, please raise a [
 
 ## References
 
-Alkhaled, A., Berkemeier, F., & Nik, K. Title to be determined. _arXiv_ (2026).
+Alkhaled, A., Berkemeier, F., Boemo, M. A., & Nik, K. Completion of DNA replication is constrained by the spatiotemporal organisation of origin firing. _arXiv_ (2026).
