@@ -1798,7 +1798,17 @@ def completion_time_bound(eps, frates, vmin_grid=1.4, dx_grid=1.0,
     )
 
     threshold_indices = np.searchsorted(aux["F"], rhs, side="left")
-    T_bound = aux["t"][threshold_indices]
+    left_indices = np.maximum(threshold_indices - 1, 0)
+    left_times = aux["t"][left_indices]
+    left_exponents = aux["F"][left_indices]
+    left_masses = aux["mI"][left_indices]
+    right_times = aux["t"][threshold_indices]
+
+    positive_masses = left_masses > 0
+    safe_masses = np.where(positive_masses, left_masses, 1.0)
+    interpolated_times = left_times + (rhs - left_exponents) / safe_masses
+    T_bound = np.where(positive_masses, interpolated_times, right_times)
+    T_bound = np.minimum(np.maximum(T_bound, left_times), right_times)
 
     return T_bound, aux
 
