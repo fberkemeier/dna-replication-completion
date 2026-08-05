@@ -1460,6 +1460,8 @@ GEOMETRY_LABELS = {
     "halfline": r"Half-line $\mathbb{R}_+$",
 }
 
+MIN_EMPIRICAL_TAIL_COUNT = 10
+
 
 def _higher_quantiles(x, q):
     x = np.sort(np.asarray(x, dtype=float), axis=0)
@@ -1811,10 +1813,20 @@ def empirical_completion_curve(rep_times_per_sim, eps_grid, ignore_mask=None):
     if tau.ndim != 2:
         raise ValueError("rep_times_per_sim must have shape (n_sims, n_pos).")
 
+    eps = np.asarray(eps_grid, dtype=float)
+    tail_counts = tau.shape[0] * eps
+    if np.any(tail_counts < MIN_EMPIRICAL_TAIL_COUNT - 1e-12):
+        minimum_eps = MIN_EMPIRICAL_TAIL_COUNT / tau.shape[0]
+        raise ValueError(
+            f"Empirical completion quantiles require N * epsilon >= "
+            f"{MIN_EMPIRICAL_TAIL_COUNT}; with N={tau.shape[0]}, use "
+            f"epsilon >= {minimum_eps:g}."
+        )
+
     ignore_mask = _normalise_ignore_mask(ignore_mask, tau.shape[1])
     tau = tau[:, ~ignore_mask]
 
-    q = 1.0 - np.asarray(eps_grid, dtype=float)
+    q = 1.0 - eps
 
     return _higher_quantiles(tau, q).max(axis=1)
 
@@ -1866,7 +1878,21 @@ def compare_completion_bounds(frates, rep_times_per_sim=None, fork_speed_grid=1.
                               geometry="torus", num_t=4000,
                               line_extension=None, ignore_mask=None):
     if eps_grid is None:
-        eps_grid = np.geomspace(1e-4, 0.99, 100)
+        minimum_eps = 1e-4
+        if rep_times_per_sim is not None:
+            simulation_count = int(np.asarray(rep_times_per_sim).shape[0])
+            if simulation_count <= 0:
+                raise ValueError("rep_times_per_sim must contain at least one simulation.")
+            minimum_eps = max(
+                minimum_eps,
+                MIN_EMPIRICAL_TAIL_COUNT / simulation_count,
+            )
+            if minimum_eps >= 0.99:
+                raise ValueError(
+                    "At least 11 simulations are required for an empirical "
+                    "completion curve."
+                )
+        eps_grid = np.geomspace(minimum_eps, 0.99, 100)
 
     eps_grid = np.asarray(eps_grid, dtype=float)
     frates = np.asarray(frates, dtype=float)
@@ -1908,10 +1934,16 @@ def compare_completion_bounds(frates, rep_times_per_sim=None, fork_speed_grid=1.
         out["fork_speed_kb_min"] = fork_speed_grid * dx_kb / dx_grid
 
     if rep_times_per_sim is not None:
+        simulation_count = int(np.asarray(rep_times_per_sim).shape[0])
         out["T_empirical"] = empirical_completion_curve(
             rep_times_per_sim,
             eps_grid=eps_grid,
             ignore_mask=ignore_mask,
+        )
+        out["simulation_count"] = simulation_count
+        out["empirical_tail_counts"] = simulation_count * eps_grid
+        out["minimum_empirical_tail_count"] = float(
+            np.min(out["empirical_tail_counts"])
         )
         out["expected_time_empirical_pointwise"] = empirical_expected_time(
             rep_times_per_sim,
@@ -1983,11 +2015,18 @@ def plot_geometry_bounds(results_by_geometry, title=None, empiricalQ=True):
         first_res = next(iter(results_by_geometry.values()))
 
         if "T_empirical" in first_res:
+            empirical_label = first_res.get("empirical_label", "empirical simulation")
+            if "simulation_count" in first_res:
+                empirical_label = (
+                    f"{empirical_label} "
+                    f"(N={first_res['simulation_count']:,}, "
+                    f"min N epsilon={first_res['minimum_empirical_tail_count']:g})"
+                )
             ax.plot(
                 first_res["eps"],
                 first_res["T_empirical"],
                 linestyle="--",
-                label=first_res.get("empirical_label", "empirical simulation"),
+                label=empirical_label,
             )
 
     ax.set_xscale("log")
@@ -2192,7 +2231,16 @@ def run_single_dataset(cfg, fork_speed_kb_min=1.4, sim_number=1000,
                        centromere_fill_value=None,
                        empirical_interior_buffer_bp=None):
     if eps_grid is None:
-        eps_grid = np.geomspace(1e-4, 0.99, 100)
+        simulation_count = int(sim_number)
+        if simulation_count <= 0:
+            raise ValueError("sim_number must be a positive integer.")
+        minimum_eps = max(1e-4, MIN_EMPIRICAL_TAIL_COUNT / simulation_count)
+        if minimum_eps >= 0.99:
+            raise ValueError(
+                "At least 11 simulations are required for an empirical "
+                "completion curve."
+            )
+        eps_grid = np.geomspace(minimum_eps, 0.99, 100)
 
     bound_geometries = tuple(cfg["bound_geometries"])
 
@@ -2542,7 +2590,7 @@ def run_dataset_collection(configs, selected_keys, **kwargs):
     return results
 
 
-def completion_summary_table(results, eps_values=(0.1, 0.05, 0.01, 0.001)):
+def completion_summary_table(results, eps_values=(0.1, 0.05, 0.01)):
     rows = []
 
     for key, result in results.items():
@@ -2576,6 +2624,9 @@ def completion_summary_table(results, eps_values=(0.1, 0.05, 0.01, 0.001)):
                 }
 
                 if "T_empirical" in bound_result:
+                    simulation_count = int(bound_result["simulation_count"])
+                    row["N_simulations"] = simulation_count
+                    row["N_epsilon"] = simulation_count * eps
                     row["T_empirical_min"] = np.interp(
                         eps,
                         eps_grid,
