@@ -4,7 +4,7 @@ This repository provides a compact research workflow for studying DNA
 replication timing and theoretical bounds on replication completion. Starting
 from Repli-seq timing tracks, the code fits initiation-rate landscapes, runs
 stochastic replication simulations, and compares the resulting timing statistics
-with the analytical bounds developed by Alkhaled et al. (2026).
+with the analytical bounds developed by [Alkhaled et al. (2026)](https://arxiv.org/abs/2609.07924).
 
 The emphasis is on connecting three views of the same replication process:
 experimental timing profiles, computational simulations, and theoretical
@@ -180,4 +180,4 @@ Should any bugs arise or if you have any questions about usage, please raise a [
 
 ## References
 
-Alkhaled, A., Berkemeier, F., Boemo, M. A., & Nik, K. Completion of DNA replication is constrained by the spatiotemporal organisation of origin firing. _arXiv_ (2026).
+[Alkhaled, A., Berkemeier, F., Boemo, M. A., & Nik, K. Completion of DNA replication is constrained by the spatiotemporal organisation of origin firing. _arXiv_ (2026)](https://arxiv.org/abs/2609.07924).
